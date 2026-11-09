@@ -1,0 +1,77 @@
+# Secrets and environment files. Keep only sanitized examples in Git.
+**/.env
+**/.env.*
+!**/.env.example
+**/secrets/
+**/secret/
+**/*service-account*.json
+**/*credentials*.json
+
+# Private keys and local TLS material.
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+**/ssl/
+
+# Python, Django, and virtual environments.
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+env/
+.tox/
+.nox/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+staticfiles/
+media/
+uploads/
+local_settings.py
+
+# Local databases, exports, and backups.
+*.sqlite3
+*.sqlite3-journal
+*.dump
+*.bak
+*.backup
+*.sql
+*.sql.gz
+**/backups/
+
+# Node, Vite, test, and generated frontend assets.
+node_modules/
+dist/
+dist-ssr/
+build/
+coverage/
+playwright-report/
+test-results/
+.vite/
+.cache/
+frontend_WASM/public/clang/
+frontend_WASM/public/vendor/monaco/
+
+# Logs and temporary files.
+*.log
+logs/
+*.pid
+*.seed
+*.swp
+*.swo
+*~
+
+# Local editor and operating-system files.
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
