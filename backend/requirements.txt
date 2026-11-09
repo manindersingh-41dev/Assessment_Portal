@@ -57,4 +57,4 @@ sendgrid==6.10.0
 # Utils
 python-dateutil==2.8.2
 pytz==2023.3
-Pillow==10.1.0
+
