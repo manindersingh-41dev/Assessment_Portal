@@ -287,6 +287,10 @@ EMAIL_BACKEND = os.getenv(
     "django.core.mail.backends.console.EmailBackend"  # Development: print to console
 )
 
+ANYMAIL = {
+    "SENDGRID_API_KEY": os.getenv("SENDGRID_API_KEY", ""),
+}
+
 EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.gmail.com")
 EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
 EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", default=True)

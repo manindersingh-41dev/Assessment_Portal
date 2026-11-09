@@ -1,4 +1,5 @@
 # Secrets and environment files. Keep only sanitized examples in Git.
+/backend/.env_prod
 **/.env
 **/.env.*
 !**/.env.example
@@ -75,3 +76,5 @@ logs/
 .vscode/
 .DS_Store
 Thumbs.db
+.neon
+.env.local
