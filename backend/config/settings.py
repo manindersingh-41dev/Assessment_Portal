@@ -14,7 +14,6 @@ from pathlib import Path
 import os
 
 import dj_database_url
-from celery.schedules import crontab
 from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -22,16 +21,6 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Load environment variables from .env file (if present).
 load_dotenv(BASE_DIR / ".env")
-
-CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
-CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")
-CELERY_BEAT_SCHEDULE = {
-    "queue-due-assessment-notifications": {
-        "task": "assessments.tasks.queue_due_assessment_notifications",
-        "schedule": crontab(minute="*/1"),
-    },
-}
-
 
 def env_bool(name, default=False):
     """Parse a boolean environment variable."""
@@ -313,5 +302,5 @@ CODE_EXECUTION_MAX_MEMORY_MB = int(os.getenv("CODE_EXECUTION_MAX_MEMORY_MB", "12
 CODE_EXECUTION_ENABLED = env_bool("CODE_EXECUTION_ENABLED", default=False)
 SERVER_DOCKER_EXECUTION_ENABLED = env_bool(
     "SERVER_DOCKER_EXECUTION_ENABLED",
-    default=True,
+    default=False,
 )

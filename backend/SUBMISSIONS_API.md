@@ -23,8 +23,12 @@ Authentication: JWT token in Authorization header
 1. CODE SUBMISSION
 ============================================================================
 
-### Submit Code for a Question
+### Legacy server-side submit route (disabled)
 POST /api/submissions/submit/{assignment_id}/
+
+This Docker-backed route is disabled in V2 and returns HTTP 410. Use the
+client evaluation endpoints in `CLIENT_EXECUTION_API.md` for WASM and desktop
+client submissions.
 
 Submit C source code for evaluation.
 
@@ -37,11 +41,9 @@ Request Body:
     "source_code": "#include <stdio.h>\nint main() { ... }"
 }
 
-Response (201 Created):
+Response (410 Gone):
 {
-    "message": "Submission received and queued for execution",
-    "submission_id": "uuid",
-    "status": "pending"
+    "detail": "Server-side submission evaluation is unavailable. Submit through the client-side evaluation flow."
 }
 
 Validation:
@@ -54,10 +56,7 @@ Validation:
 - Max 100KB size
 
 Status Codes:
-- 201: Submission created successfully
-- 400: Validation error (invalid code, deadline passed, etc.)
-- 403: Not authorized (student doesn't own assignment)
-- 500: Internal server error
+- 410: This legacy server-side evaluation route is disabled
 
 Dangerous Patterns Blocked:
 - system()
@@ -503,7 +502,7 @@ Common Errors:
    - Sample test: input "3 5", expected output "8"
    - Hidden test: input "100 200", expected output "300"
 
-2. **Student Submits**
+2. **Legacy server submission (disabled)**
 ```bash
 curl -X POST http://localhost:8000/api/submissions/submit/assignment-uuid/ \
   -H "Authorization: Bearer {token}" \
@@ -514,7 +513,9 @@ curl -X POST http://localhost:8000/api/submissions/submit/assignment-uuid/ \
   }'
 ```
 
-Response:
+This route now returns HTTP 410. Submit through the client evaluation API instead.
+
+Legacy response example (no longer returned):
 ```json
 {
   "message": "Submission received and queued for execution",
@@ -669,27 +670,18 @@ Result:
 ============================================================================
 
 ### Requirements
-- Docker (for code execution)
-- Celery (for background tasks)
-- Redis (for job queue)
-- GCC compiler
+- Docker and GCC are only needed for the legacy server-side sample runner, which is disabled by default.
+- The active WASM flow executes code in the client and reports results to the backend.
 
 ### Docker Setup
 1. Pull base image: gcc:11-bullseye
 2. Verify: docker pull gcc:11-bullseye
 3. Test: docker run --rm gcc:11-bullseye gcc --version
 
-### Celery Setup
-1. Install: pip install celery redis
-2. Configure Redis connection in settings
-3. Start Celery: celery -A submissions worker -l info
-
 ### Production Setup
-- Use separate Docker host for execution
-- Configure resource limits
-- Enable container cleanup cron job
-- Monitor execution queue
-- Set up alerting for failures
+- No Celery worker or Redis broker is used.
+- OTP, password-reset, and assessment-assignment emails are sent synchronously by Django.
+- Assessment deadline reminders and queued server-side submission evaluation are disabled.
 
 ---
 

@@ -33,6 +33,7 @@ The API is served at `http://localhost:8000/api/` and Django Admin at `http://lo
 
 ## Notes
 
-- Redis and Celery are used for background notifications and reminders. Configure the broker settings when running those workers.
-- The legacy server-side code runner requires a reachable Docker daemon. A Django Docker image alone does not provide one. Browser-based evaluation does not require the API host to compile student code.
+- OTP, password-reset, and assessment-assignment emails are sent synchronously through Django's configured email backend. Assessment deadline reminders are disabled.
+- Celery and Redis are not used. Client-side evaluation does not require the API host to compile student code.
+- The legacy server-side sample runner requires a reachable Docker daemon and is disabled by default. A Django Docker image alone does not provide one.
 - Render's native Python service does not use the removed Docker Compose files. Configure its build/start commands and environment variables in Render when deploying.

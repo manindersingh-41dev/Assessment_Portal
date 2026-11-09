@@ -16,11 +16,7 @@ djangorestframework-simplejwt==5.5.1
 python-decouple==3.8
 PyJWT>=2.8.0
 cryptography>=41.0.7
-
-# Async & Background Tasks
-celery==5.3.4
-redis==5.0.1
-kombu==5.3.4
+python-dotenv
 
 # Code Execution
 docker==7.0.0
@@ -57,4 +53,3 @@ sendgrid==6.10.0
 # Utils
 python-dateutil==2.8.2
 pytz==2023.3
-dotenv

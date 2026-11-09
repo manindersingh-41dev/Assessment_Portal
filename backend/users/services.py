@@ -5,7 +5,6 @@ Handles OTP generation, email sending, and business logic for authentication.
 """
 
 import random
-import smtplib
 from django.core.mail import send_mail
 from django.utils import timezone
 from django.conf import settings

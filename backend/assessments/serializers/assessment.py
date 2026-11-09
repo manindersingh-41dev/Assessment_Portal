@@ -229,7 +229,9 @@ class AssessmentAssignmentSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         if not request or getattr(request.user, "role", None) != "faculty":
             return []
-        notifications = assignment.notifications.all()
+        notifications = assignment.notifications.filter(
+            kind=AssessmentNotification.Kind.ASSIGNED
+        )
         return AssessmentNotificationSerializer(notifications, many=True).data
 
     class Meta:

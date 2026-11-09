@@ -13,13 +13,11 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from django.conf import settings
-from django.db import transaction
 from django.shortcuts import get_object_or_404
-from django.utils import timezone
 
 from assessments.models import AssessmentAssignment, AssessmentQuestion
 from questions.models import TestCase as QuestionTestCase
-from .models import CodeSubmission, TestCaseVerdict, ExecutionLog
+from .models import CodeSubmission, ExecutionLog
 from .serializers import (
     CodeSubmissionCreateSerializer, CodeSubmissionStatusSerializer,
     CodeSubmissionResultSerializer, CodeSubmissionListSerializer,
@@ -28,9 +26,8 @@ from .serializers import (
     ClientEvaluationResultsSerializer,
 )
 from .permissions import IsStudent, IsOwnSubmission, CanViewSubmissionResult
-from .services import SubmissionService, is_stale_evaluation
+from .services import SubmissionService
 from .execution_service import ComparisonService, DockerExecutionService
-from .tasks import execute_submission
 from .client_evaluation import (
     ClientEvaluationError,
     ClientEvaluationService,
@@ -457,101 +454,15 @@ class SubmissionCreateView(viewsets.ViewSet):
         return self._create_submission(request, assignment_id)
 
     def _create_submission(self, request, assignment_id):
-        if not settings.SERVER_DOCKER_EXECUTION_ENABLED:
-            return Response(
-                {"detail": "Server-side execution is disabled. Use a supported client runner."},
-                status=status.HTTP_410_GONE,
-            )
-        if not assignment_id:
-            return Response(
-                {'error': 'Assignment ID required'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        serializer = CodeSubmissionCreateSerializer(
-            data=request.data,
-            context={
-                'request': request,
-                'assignment_id': assignment_id,
-                'allow_submission_grace': True,
-            }
+        return Response(
+            {
+                "detail": (
+                    "Server-side submission evaluation is unavailable. "
+                    "Submit through the client-side evaluation flow."
+                )
+            },
+            status=status.HTTP_410_GONE,
         )
-
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            # Create submission
-            submission, error = SubmissionService.create_submission(
-                student_id=str(request.user.id),
-                assignment_id=assignment_id,
-                question_id=str(serializer.validated_data['question_id']),
-                source_code=serializer.validated_data['source_code'],
-                ip_address=serializer.validated_data['ip_address'],
-                allow_submission_grace=True,
-            )
-
-            if error:
-                return Response(
-                    {'error': error},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-            logger.info(
-                f"Created submission {submission.id} for student {request.user.id}, "
-                f"assignment {assignment_id}"
-            )
-
-            # Trigger async execution. Do not leave a pending submission behind
-            # if the broker is down and the task cannot be queued.
-            try:
-                execute_submission.delay(
-                    str(submission.id),
-                    submission.evaluation_generation,
-                )
-            except Exception:
-                logger.exception("Could not queue execution for submission %s", submission.id)
-                submission.status = CodeSubmission.Status.FAILED
-                submission.verdict = CodeSubmission.Verdict.INTERNAL_ERROR
-                submission.compilation_error = (
-                    "Evaluation could not start because the background queue is unavailable."
-                )
-                submission.execution_completed_at = timezone.now()
-                submission.save(update_fields=[
-                    "status",
-                    "verdict",
-                    "compilation_error",
-                    "execution_completed_at",
-                    "updated_at",
-                ])
-                return Response(
-                    {
-                        "error": (
-                            "The submission could not be queued for evaluation. "
-                            "Make sure Redis and the Celery worker are running, then try again."
-                        ),
-                        "submission_id": str(submission.id),
-                    },
-                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
-                )
-
-            logger.info(f"Queued execution for submission {submission.id}")
-
-            return Response(
-                {
-                    'message': 'Submission received and queued for execution',
-                    'submission_id': str(submission.id),
-                    'status': submission.status
-                },
-                status=status.HTTP_201_CREATED
-            )
-
-        except Exception as e:
-            logger.exception(f"Error creating submission: {e}")
-            return Response(
-                {'error': f'Error creating submission: {str(e)}'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
 
 
 class SubmissionStatusView(viewsets.ViewSet):
@@ -583,110 +494,16 @@ class SubmissionStatusView(viewsets.ViewSet):
 
     @action(detail=True, methods=['post'])
     def retry(self, request, pk=None):
-        """Restart a failed or stale evaluation for its owning faculty member."""
+        """Server-side evaluation retries are unavailable without a worker."""
         if request.user.role != "faculty" or not request.user.is_faculty_approved:
             return Response(
                 {"error": "Only approved faculty can retry evaluations."},
                 status=status.HTTP_403_FORBIDDEN,
             )
-
-        generation = None
-        try:
-            with transaction.atomic():
-                submission = CodeSubmission.objects.select_for_update().select_related(
-                    "assignment__assessment"
-                ).get(id=pk)
-                if submission.assignment.assessment.created_by_id != request.user.id:
-                    return Response(
-                        {"error": "You can only retry evaluations for your assessments."},
-                        status=status.HTTP_403_FORBIDDEN,
-                    )
-                if not settings.SERVER_DOCKER_EXECUTION_ENABLED:
-                    return Response(
-                        {"error": "Server-side code execution is disabled."},
-                        status=status.HTTP_410_GONE,
-                    )
-                if submission.runner_type != CodeSubmission.RunnerType.SERVER_DOCKER:
-                    return Response(
-                        {
-                            "error": (
-                                "Client-side evaluations cannot be rerun by the server. "
-                                "The student must resubmit the code from a supported client."
-                            )
-                        },
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-                if submission.status != CodeSubmission.Status.FAILED and not is_stale_evaluation(submission):
-                    return Response(
-                        {"error": "Only failed or stale evaluations can be retried."},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-
-                submission.evaluation_generation += 1
-                submission.status = CodeSubmission.Status.PENDING
-                submission.verdict = CodeSubmission.Verdict.NOT_EVALUATED
-                submission.marks_obtained = None
-                submission.compilation_error = None
-                submission.compilation_time_ms = None
-                submission.total_test_cases = 0
-                submission.passed_test_cases = 0
-                submission.failed_test_cases = 0
-                submission.execution_time_ms = None
-                submission.max_memory_used_mb = None
-                submission.execution_job_id = None
-                submission.execution_started_at = None
-                submission.execution_completed_at = None
-                submission.save(update_fields=[
-                    "evaluation_generation",
-                    "status",
-                    "verdict",
-                    "marks_obtained",
-                    "compilation_error",
-                    "compilation_time_ms",
-                    "total_test_cases",
-                    "passed_test_cases",
-                    "failed_test_cases",
-                    "execution_time_ms",
-                    "max_memory_used_mb",
-                    "execution_job_id",
-                    "execution_started_at",
-                    "execution_completed_at",
-                    "updated_at",
-                ])
-                TestCaseVerdict.objects.filter(submission=submission).delete()
-                ExecutionLog.objects.filter(submission=submission).delete()
-                generation = submission.evaluation_generation
-
-            execute_submission.delay(str(submission.id), generation)
-        except CodeSubmission.DoesNotExist:
-            return Response({"error": "Submission not found."}, status=status.HTTP_404_NOT_FOUND)
-        except Exception:
-            logger.exception("Could not queue retry for submission %s", pk)
-            if generation is not None:
-                try:
-                    CodeSubmission.objects.filter(
-                        id=pk,
-                        evaluation_generation=generation,
-                    ).update(
-                        status=CodeSubmission.Status.FAILED,
-                        verdict=CodeSubmission.Verdict.INTERNAL_ERROR,
-                        compilation_error="Evaluation could not be queued. Check the background worker and retry.",
-                        execution_completed_at=timezone.now(),
-                        updated_at=timezone.now(),
-                    )
-                except Exception:
-                    logger.exception("Could not mark failed retry for submission %s", pk)
-            return Response(
-                {"error": "Evaluation could not be queued. Check the background worker and retry."},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
-            )
-
-        return Response({
-            "message": "Evaluation retry queued.",
-            "submission_id": str(submission.id),
-            "status": CodeSubmission.Status.PENDING,
-            "evaluation_generation": generation,
-        }, status=status.HTTP_202_ACCEPTED)
+        return Response(
+            {"error": "Server-side evaluation retries are disabled; use the client-side runner."},
+            status=status.HTTP_410_GONE,
+        )
 
     @action(detail=False, methods=['get'], url_path='status/(?P<submission_id>[0-9a-f-]+)')
     def get_status(self, request, submission_id=None):

@@ -103,7 +103,7 @@ const AssessmentDetailsPage = () => {
     setRetryingNotificationId(notificationId);
     try {
       await api.post(endpoints.assessments.retryNotification(assignmentId, notificationId));
-      addNotification('Email retry queued.', 'success');
+      addNotification('Email sent.', 'success');
       await fetchAssessment();
     } catch (error) {
       addNotification(error.response?.data?.error || 'Could not retry this email.', 'error');
@@ -243,9 +243,6 @@ const AssessmentDetailsPage = () => {
                             <p className="mt-1 text-slate-500">
                               One group email to {notification.recipient_count} students (one in To, others in CC).
                             </p>
-                          )}
-                          {notification.kind === 'reminder' && notification.status === 'pending' && notification.scheduled_for && (
-                            <p className="mt-1 text-slate-500">Scheduled for {dateLabel(notification.scheduled_for)}</p>
                           )}
                           {notification.status === 'failed' && notification.last_error && (
                             <div className="mt-1 flex flex-wrap items-start justify-between gap-2">

@@ -23,7 +23,7 @@ References: [Clang WASM package and browser API](https://www.npmjs.com/package/%
 - Compile with C11 and the legacy execution service's `-O0 -Wall -Wextra` behavior where the WASM toolchain supports it.
 - The toolchain has `scanf`/stdin, `printf`, strings, pointers, structs, recursion, dynamic memory and a C standard library. The corpus below includes these cases and `math.h`.
 - A recent upstream measurement reports roughly 0.7 seconds for a warm C compile and a roughly 28 MB first toolchain download. These are upstream measurements, not measurements on this portal or campus devices.
-- The compiler/runtime uses about 85 MB after decompression. Each student's browser bears this memory and compile cost; it does not add C compilation load to the Django/Celery host. Static asset caching is important when many students start at once.
+- The compiler/runtime uses about 85 MB after decompression. Each student's browser bears this memory and compile cost; it does not add C compilation load to the Django host. Static asset caching is important when many students start at once.
 - WASI is not a Linux environment. Non-standard OS headers/APIs, console-specific functions, network access, interactive input and some system calls are outside the supported contract. Test inputs are provided in full before execution.
 - Clang/WASI and GCC are different toolchains. Undefined behavior and implementation-specific behavior can still produce different results. The server remains responsible for output comparison and final verdicts.
 - Browser interruption is enforced by terminating a dedicated test-case worker. Each case starts in a fresh instance, so a runaway case does not block later cases. Compilation happens once for the source snapshot.

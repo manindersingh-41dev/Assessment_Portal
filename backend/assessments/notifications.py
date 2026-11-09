@@ -1,167 +1,150 @@
-"""Scheduling helpers for grouped assessment assignment emails."""
+"""Synchronous delivery for grouped assessment assignment emails."""
 
+import logging
+import random
 import uuid
-from datetime import timedelta
 
+from django.conf import settings
+from django.core.mail import EmailMessage
 from django.db import transaction
+from django.db.models import F
 from django.utils import timezone
 
 from .models import AssessmentNotification
 
-REMINDER_LEAD_TIME = timedelta(hours=24)
+logger = logging.getLogger(__name__)
 
 
-def reminder_send_time(deadline, now=None):
-    """Schedule a reminder 24 hours early, or halfway through shorter windows."""
-    now = now or timezone.now()
-    remaining = deadline - now
-    if remaining <= timedelta(0):
-        return None
-    if remaining <= REMINDER_LEAD_TIME:
-        return now + remaining / 2
-    return deadline - REMINDER_LEAD_TIME
+def _assignment_email_content(notification):
+    assessment = notification.assignment.assessment
+    frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:5173").rstrip("/")
+    assessment_url = f"{frontend_url}/student/assessments/{assessment.id}"
+    start_text = timezone.localtime(assessment.start_time).strftime(
+        "%A, %B %d, %Y at %I:%M %p %Z"
+    )
+    end_text = timezone.localtime(assessment.end_time).strftime(
+        "%A, %B %d, %Y at %I:%M %p %Z"
+    )
+    time_limit = (
+        f"{assessment.duration_minutes} minutes after starting"
+        if assessment.is_timed
+        else "No completion time limit after starting"
+    )
+    message = (
+        f"Hello,\n\n{assessment.title} has been assigned to you.\n\n"
+        f"Available from: {start_text}\n"
+        f"Scheduled window closes: {end_text}\n"
+        f"Time limit: {time_limit}\n"
+        "If a personal deadline applies to you, sign in to see its date and time.\n\n"
+        f"Open the assessment: {assessment_url}\n\n"
+        "If you have already submitted the assessment, you can ignore this message."
+    )
+    return f"Assessment assigned: {assessment.title}", message
 
 
-def enqueue_notification_group(notifications, batch_id=None):
-    """Queue due notification records as one email to their assigned students."""
-    from .tasks import send_assessment_notification_batch
-
+def send_notification_group(notifications, batch_id=None):
+    """Send one grouped assignment email synchronously through Django's email backend."""
     notifications = list(notifications)
     if not notifications:
-        return
+        return {"status": "empty"}
+
     kind = notifications[0].kind
     if any(notification.kind != kind for notification in notifications):
         raise ValueError("A grouped email can contain only one notification type.")
+    if kind != AssessmentNotification.Kind.ASSIGNED:
+        return {"status": "skipped", "error": "Scheduled reminders are disabled."}
 
+    batch_id = batch_id or notifications[0].email_batch_id or uuid.uuid4()
+    notification_ids = [notification.id for notification in notifications]
     now = timezone.now()
-    due_ids = [
-        notification.id
-        for notification in notifications
-        if not notification.scheduled_for or notification.scheduled_for <= now
-    ]
-    if not due_ids:
-        return
-    batch_id = batch_id or uuid.uuid4()
 
-    try:
-        with transaction.atomic():
-            queued = list(
-                AssessmentNotification.objects.select_for_update().filter(
-                    id__in=due_ids,
-                    status=AssessmentNotification.Status.PENDING,
-                )
+    with transaction.atomic():
+        eligible = list(
+            AssessmentNotification.objects.select_for_update()
+            .select_related("assignment__assessment", "assignment__student")
+            .filter(
+                id__in=notification_ids,
+                kind=AssessmentNotification.Kind.ASSIGNED,
+                status=AssessmentNotification.Status.PENDING,
             )
-            if not queued:
-                return
-            AssessmentNotification.objects.filter(
-                id__in=[notification.id for notification in queued],
-            ).update(
-                status=AssessmentNotification.Status.QUEUED,
-                email_batch_id=batch_id,
-                updated_at=now,
-            )
-        send_assessment_notification_batch.delay(str(batch_id), kind)
-    except Exception as exc:
-        AssessmentNotification.objects.filter(
+        )
+        if not eligible:
+            return {"status": "already_processed"}
+
+        eligible_ids = [notification.id for notification in eligible]
+        AssessmentNotification.objects.filter(id__in=eligible_ids).update(
+            status=AssessmentNotification.Status.SENDING,
             email_batch_id=batch_id,
-            kind=kind,
-            status=AssessmentNotification.Status.QUEUED,
-        ).update(
-            status=AssessmentNotification.Status.FAILED,
-            last_error=f"Could not queue email: {exc}"[:1000],
-            updated_at=timezone.now(),
+            attempts=F("attempts") + 1,
+            updated_at=now,
         )
 
+    recipient_emails = list(dict.fromkeys(
+        notification.assignment.student.email
+        for notification in eligible
+        if notification.assignment.student.email
+    ))
+    if not recipient_emails:
+        error = "Assigned students do not have email addresses."
+        AssessmentNotification.objects.filter(id__in=eligible_ids).update(
+            status=AssessmentNotification.Status.FAILED,
+            last_error=error,
+            updated_at=timezone.now(),
+        )
+        return {"status": "failed", "error": error}
 
-def schedule_assignment_notifications(assignments):
-    """Create one assignment email batch and per-student reminder records."""
+    primary_recipient = random.choice(recipient_emails)
+    cc_recipients = [email for email in recipient_emails if email != primary_recipient]
+    try:
+        subject, message = _assignment_email_content(eligible[0])
+        email = EmailMessage(
+            subject=subject,
+            body=message,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            to=[primary_recipient],
+            cc=cc_recipients,
+        )
+        if email.send(fail_silently=False) != 1:
+            raise RuntimeError("Email service did not accept the message.")
+    except Exception as exc:
+        error = str(exc)[:1000]
+        AssessmentNotification.objects.filter(id__in=eligible_ids).update(
+            status=AssessmentNotification.Status.FAILED,
+            last_error=error,
+            updated_at=timezone.now(),
+        )
+        logger.exception("Assessment assignment email batch %s failed", batch_id)
+        return {"status": "failed", "error": error}
+
+    sent_at = timezone.now()
+    AssessmentNotification.objects.filter(id__in=eligible_ids).update(
+        status=AssessmentNotification.Status.SENT,
+        sent_at=sent_at,
+        last_error="",
+        updated_at=sent_at,
+    )
+    return {"status": "sent", "recipient_count": len(recipient_emails)}
+
+
+def send_assignment_notifications(assignments):
+    """Create assignment email records and send one grouped email immediately."""
     assignments = list(assignments)
     if not assignments:
-        return
+        return {"status": "empty"}
 
     now = timezone.now()
-    assignment_batch_id = uuid.uuid4()
-    reminder_batch_id = uuid.uuid4()
-    assignment_notices = []
-    reminders = []
-
+    batch_id = uuid.uuid4()
+    notifications = []
     for assignment in assignments:
-        assigned_notice, _ = AssessmentNotification.objects.get_or_create(
+        notification, _ = AssessmentNotification.objects.get_or_create(
             assignment=assignment,
             kind=AssessmentNotification.Kind.ASSIGNED,
             defaults={
                 "status": AssessmentNotification.Status.PENDING,
                 "scheduled_for": now,
-                "email_batch_id": assignment_batch_id,
+                "email_batch_id": batch_id,
             },
         )
-        assignment_notices.append(assigned_notice)
+        notifications.append(notification)
 
-        deadline = assignment.effective_deadline()
-        reminder_at = reminder_send_time(deadline, now) if deadline else None
-        reminder, _ = AssessmentNotification.objects.get_or_create(
-            assignment=assignment,
-            kind=AssessmentNotification.Kind.REMINDER,
-            defaults={
-                "status": (
-                    AssessmentNotification.Status.PENDING
-                    if reminder_at
-                    else AssessmentNotification.Status.SKIPPED
-                ),
-                "scheduled_for": reminder_at,
-                "email_batch_id": reminder_batch_id,
-                "last_error": "No upcoming deadline to remind about." if not reminder_at else "",
-            },
-        )
-        if reminder.status == AssessmentNotification.Status.PENDING:
-            reminders.append(reminder)
-
-    enqueue_notification_group(assignment_notices, assignment_batch_id)
-    enqueue_notification_group(reminders, reminder_batch_id)
-
-
-def reschedule_reminder_for_started_assignment(assignment):
-    """Move a pending reminder to the student's actual completion deadline."""
-    notification = AssessmentNotification.objects.filter(
-        assignment=assignment,
-        kind=AssessmentNotification.Kind.REMINDER,
-        status__in=[
-            AssessmentNotification.Status.PENDING,
-            AssessmentNotification.Status.QUEUED,
-        ],
-    ).first()
-    if not notification:
-        return
-
-    now = timezone.now()
-    deadline = assignment.effective_deadline()
-    reminder_at = reminder_send_time(deadline, now) if deadline else None
-    if not reminder_at:
-        notification.status = AssessmentNotification.Status.SKIPPED
-        notification.scheduled_for = None
-        notification.last_error = "The student has no remaining assessment deadline."
-        notification.save(update_fields=[
-            "status", "scheduled_for", "last_error", "updated_at",
-        ])
-        return
-
-    notification.scheduled_for = reminder_at
-    notification.status = AssessmentNotification.Status.PENDING
-    notification.email_batch_id = uuid.uuid4()
-    notification.save(update_fields=[
-        "status", "scheduled_for", "email_batch_id", "updated_at",
-    ])
-    enqueue_notification_group([notification])
-
-
-def reschedule_reminders_for_assessment(assessment):
-    """Recalculate pending reminders after faculty changes the schedule."""
-    assignments = assessment.assignments.filter(
-        notifications__kind=AssessmentNotification.Kind.REMINDER,
-        notifications__status__in=[
-            AssessmentNotification.Status.PENDING,
-            AssessmentNotification.Status.QUEUED,
-        ],
-    ).distinct().prefetch_related("notifications")
-    for assignment in assignments:
-        reschedule_reminder_for_started_assignment(assignment)
+    return send_notification_group(notifications, batch_id)

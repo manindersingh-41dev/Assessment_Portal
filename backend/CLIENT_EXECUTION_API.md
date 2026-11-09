@@ -1,13 +1,13 @@
 # Client-Side Execution API Contract
 
-**Status:** Source implementation is in Portal_V2 for case retrieval, pending submission creation, and result reporting. Apply migrations `0006` and `0007` before using these endpoints; no database migration was applied during this work.
+**Status:** Source implementation is in Portal_V2 for case retrieval, pending submission creation, and result reporting. Apply all outstanding migrations through `0008` before deploying; no database migration was applied during this work.
 
 **Scope:** A common backend contract for browser WebAssembly and the future Tauri desktop runner. The API must not depend on WASM, Tauri, or a particular compiler implementation.
 
 ## 1. Current V2 baseline
 
 - `POST /api/submissions/run/` compiles and runs visible cases through Docker in the Django web process.
-- Final submissions are stored by the submission API and evaluated by a Celery task through Docker.
+- Final submissions are stored and evaluated from results reported by the client runner. No Celery worker or Redis broker is used.
 - `AssessmentQuestion.id` is the question identifier used by submissions. It is the assessment-to-question link UUID, not `questions.Question.id`.
 - The active submission models are exported by `submissions/models/__init__.py` from the `submissions/models/` package. Several modules import from `.models`. The sibling `submissions/models.py` contains duplicate older model definitions; it must not be used for schema edits unless the app's model loading is deliberately changed.
 - `SubmissionService.evaluate_assignment_submissions()` currently selects the highest-scoring completed submission. The agreed result rule for this transition is the latest accepted submission per assessment question, whether it passed or failed.
@@ -153,7 +153,7 @@ Successful response returns the completed submission ID, aggregate verdict, mark
 
 ## 8. Legacy transition
 
-Keep the current Docker-backed `run/` and queued submission flow working while the new endpoints are introduced. The client-result API is additive. Faculty retry cannot send a client-run submission back through Docker; the student must resume or resubmit from a supported client. The setting `SERVER_DOCKER_EXECUTION_ENABLED` defaults to `true` during migration. After the client flow has been integrated and piloted, set it to `false` to reject new Docker runs/retries and fail any queued Docker task that has not started. Do this between assessment windows, after the Docker queue is empty; existing submitted assignments with unfinished server evaluations cannot switch to client execution automatically. The same client-result API remains available to the Tauri client. Celery remains for email/reminder work.
+The client-result API is the active submission flow for browser WASM and the Tauri client. Server-side Docker submission evaluation and retries are disabled because the background worker has been removed. Existing unfinished server evaluations cannot switch to client execution automatically; students must submit through a supported client runner.
 
 ## 9. Backend completion criteria
 
@@ -162,4 +162,4 @@ Keep the current Docker-backed `run/` and queued submission flow working while t
 - Hidden expected outputs and detailed hidden results are absent from student-facing responses.
 - Results, scorecards, faculty pages, and exports use the latest submission per question, not the highest-scoring historical submission.
 - Retried requests do not create duplicate submissions or change which submission is latest.
-- Existing Docker execution can remain available during migration and can later be disabled without removing email/reminder workers.
+- Django sends OTP, password-reset, and assignment emails synchronously. Scheduled assessment reminders are disabled.

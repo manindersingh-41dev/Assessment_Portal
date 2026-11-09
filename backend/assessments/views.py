@@ -35,11 +35,7 @@ from .permissions import (
     IsStudent
 )
 from .services import AssessmentService, AssignmentService
-from .notifications import (
-    reschedule_reminder_for_started_assignment,
-    reschedule_reminders_for_assessment,
-    schedule_assignment_notifications,
-)
+from .notifications import send_assignment_notifications, send_notification_group
 
 
 class AssessmentPagination(PageNumberPagination):
@@ -130,8 +126,6 @@ class AssessmentViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(instance, data=request.data, partial=False)
         serializer.is_valid(raise_exception=True)
         self.perform_update(serializer)
-        reschedule_reminders_for_assessment(serializer.instance)
-
         return Response(
             {
                 'message': 'Assessment updated successfully',
@@ -226,7 +220,7 @@ class AssessmentViewSet(viewsets.ModelViewSet):
             batch_ids=serializer.validated_data.get('batch_ids', []),
             deadline=serializer.validated_data.get('deadline')
         )
-        schedule_assignment_notifications(assignments)
+        send_assignment_notifications(assignments)
         prefetch_related_objects(assignments, 'notifications')
 
         return Response(
@@ -394,6 +388,11 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
             id=notification_id,
             assignment=assignment,
         )
+        if notification.kind != AssessmentNotification.Kind.ASSIGNED:
+            return Response(
+                {'error': 'Scheduled reminders are disabled.'},
+                status=status.HTTP_410_GONE,
+            )
         if notification.status != AssessmentNotification.Status.FAILED:
             return Response(
                 {'error': 'Only failed emails can be retried.'},
@@ -416,17 +415,16 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
             updated_at=timezone.now(),
         )
         batch_notifications = list(batch_notifications)
-        from .notifications import enqueue_notification_group
-        enqueue_notification_group(batch_notifications, notification.email_batch_id)
+        send_notification_group(batch_notifications, notification.email_batch_id)
         notification.refresh_from_db(fields=['status', 'last_error'])
         if notification.status == AssessmentNotification.Status.FAILED:
             return Response(
-                {'error': notification.last_error or 'The email could not be queued.'},
+                {'error': notification.last_error or 'The email could not be sent.'},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
         return Response(
-            {'message': 'Email retry queued.', 'status': notification.status},
-            status=status.HTTP_202_ACCEPTED,
+            {'message': 'Email sent.', 'status': notification.status},
+            status=status.HTTP_200_OK,
         )
 
     @action(detail=True, methods=['get', 'put'], url_path='drafts')
@@ -485,8 +483,6 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
             )
 
         assignment.mark_started()
-        reschedule_reminder_for_started_assignment(assignment)
-
         return Response(
             {
                 'message': 'Assignment started successfully',

@@ -139,7 +139,7 @@ class CodeSubmission(UUIDModel, TimeStampedModel):
         null=True,
         unique=True,
         db_index=True,
-        help_text="Celery job ID for tracking"
+        help_text="Background execution job ID, when available."
     )
     execution_started_at = models.DateTimeField(
         null=True,

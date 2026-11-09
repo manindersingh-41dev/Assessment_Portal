@@ -560,13 +560,6 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-      redis:
-        image: redis:7
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
 
     steps:
     - uses: actions/checkout@v2
@@ -629,7 +622,7 @@ The test framework automatically:
 - Creates isolated test database per test run
 - Rolls back all changes after tests
 - Cleans up test files
-- Resets Redis cache
+- V2 does not require Redis for its test suite.
 
 No manual cleanup required.
 

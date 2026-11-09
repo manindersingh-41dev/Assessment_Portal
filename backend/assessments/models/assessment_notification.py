@@ -10,6 +10,7 @@ from users.models.base import TimeStampedModel, UUIDModel
 class AssessmentNotification(UUIDModel, TimeStampedModel):
     class Kind(models.TextChoices):
         ASSIGNED = "assigned", "Assignment notice"
+        # Retained for existing historical notification rows; new reminders are disabled.
         REMINDER = "reminder", "Deadline reminder"
 
     class Status(models.TextChoices):
