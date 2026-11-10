@@ -6,8 +6,8 @@ Provides admin panel for managing assessments, assignments, and results.
 
 from django.contrib import admin
 from django.utils.html import format_html
-from django.urls import reverse
-from django.db.models import Count, Q
+from django.db.models import Count
+from django.utils import timezone
 from .models import (
     Assessment, AssessmentQuestion,
     AssessmentAssignment, AssessmentResult
@@ -19,14 +19,15 @@ class AssessmentAdmin(admin.ModelAdmin):
     """Admin interface for Assessment model."""
 
     list_display = (
-        'title', 'status_colored', 'published_badge', 'start_time',
+        'title', 'status_colored', 'published_badge', 'is_open_to_all_students',
+        'start_time',
         'end_time', 'total_marks', 'question_count', 'assignment_count',
         'created_by_name', 'created_at'
     )
-    list_filter = ('status', 'is_published', 'created_at', 'start_time')
+    list_filter = ('status', 'is_published', 'is_open_to_all_students', 'created_at', 'start_time')
     search_fields = ('title', 'description', 'created_by__email')
     readonly_fields = (
-        'id', 'created_by', 'created_at', 'updated_at',
+        'id', 'created_by', 'created_at', 'updated_at', 'published_at',
         'question_count_display', 'assignment_summary'
     )
     ordering = ('-created_at',)
@@ -36,18 +37,11 @@ class AssessmentAdmin(admin.ModelAdmin):
             'fields': ('id', 'title', 'description', 'instructions', 'status')
         }),
         ('Timing', {
-            'fields': (
-                'start_time', 'end_time', 'duration_minutes'
-            )
+            'fields': ('start_time', 'end_time', 'duration_minutes', 'is_timed')
         }),
-        ('Marks', {
-            'fields': ('total_marks', 'passing_marks')
-        }),
-        ('Configuration', {
-            'fields': (
-                'resubmission_policy', 'shuffle_questions',
-                'show_results_to_students', 'is_published'
-            )
+        ('Marks', {'fields': ('total_marks',)}),
+        ('Availability', {
+            'fields': ('is_published', 'is_open_to_all_students', 'published_at')
         }),
         ('Questions', {
             'fields': ('question_count_display',),
@@ -65,12 +59,18 @@ class AssessmentAdmin(admin.ModelAdmin):
 
     actions = ['publish_assessments', 'archive_assessments']
 
+    def get_readonly_fields(self, request, obj=None):
+        fields = super().get_readonly_fields(request, obj)
+        if obj and (obj.is_published or obj.published_at):
+            return fields + ('is_open_to_all_students',)
+        return fields
+
     def get_queryset(self, request):
         """Optimize queryset with annotations."""
         qs = super().get_queryset(request)
         return qs.annotate(
-            question_count=Count('questions'),
-            assignment_count=Count('assignments')
+            question_count=Count('assessment_questions', distinct=True),
+            assignment_count=Count('assignments', distinct=True)
         )
 
     def status_colored(self, obj):
@@ -128,16 +128,17 @@ class AssessmentAdmin(admin.ModelAdmin):
 
     def question_count_display(self, obj):
         """Display detailed question information."""
-        questions = obj.questions.all()
-        if not questions:
+        questions = obj.assessment_questions.all()
+        count = questions.count()
+        if not count:
             return 'No questions'
-        return f'Total: {questions.count()} questions'
+        return f'Total: {count} questions'
     question_count_display.short_description = 'Questions'
 
     def assignment_summary(self, obj):
         """Display assignment summary."""
         assignments = obj.assignments.all()
-        if not assignments:
+        if not assignments.exists():
             return 'No assignments'
 
         summary = {
@@ -159,9 +160,11 @@ class AssessmentAdmin(admin.ModelAdmin):
         count = 0
         for assessment in queryset:
             if assessment.status == Assessment.Status.DRAFT:
-                if assessment.questions.exists():
+                if assessment.assessment_questions.exists():
                     assessment.is_published = True
                     assessment.status = Assessment.Status.ACTIVE
+                    if assessment.published_at is None:
+                        assessment.published_at = timezone.now()
                     assessment.save()
                     count += 1
         self.message_user(request, f'{count} assessment(s) published.')
@@ -368,11 +371,11 @@ class AssessmentResultAdmin(admin.ModelAdmin):
         return format_html(
             '<strong>Marks:</strong> {}/{} ({:.1f}%)<br>'
             '<strong>Status:</strong> {}<br>'
-            '<strong>Passing Marks:</strong> {}',
+            '<strong>Maximum Marks:</strong> {}',
             obj.total_marks_obtained,
             obj.assessment.total_marks,
             obj.percentage,
             'Passed' if obj.passed else 'Failed',
-            obj.assessment.passing_marks
+            obj.assessment.total_marks
         )
     result_summary.short_description = 'Result Summary'

@@ -34,6 +34,7 @@ Request Body:
     "end_datetime": "2024-11-10T12:00:00Z",
     "duration_minutes": 120,
     "total_marks": 100,
+    "is_open_to_all_students": true,
     "passing_marks": 60,
     "resubmission_policy": "not_allowed",  # not_allowed, once, unlimited
     "shuffle_questions": false,
@@ -68,6 +69,7 @@ Response (201 Created):
         "shuffle_questions": false,
         "show_results_to_students": true,
         "is_published": false,
+        "is_open_to_all_students": true,
         "created_by_name": "John Doe",
         "created_at": "2024-11-06T10:00:00Z",
         "updated_at": "2024-11-06T10:00:00Z",
@@ -192,7 +194,12 @@ Faculty permissions:
 - See only their own assessments
 
 Student permissions:
-- See only published assessments assigned to them
+- See published assessments assigned to them and assessments open to all students
+
+`is_open_to_all_students` defaults to `true`. Published open assessments are
+visible to students who register later as well. Set it to `false` to make the
+assessment available only to students explicitly assigned through the assign
+endpoint. Student access cannot be changed after publication.
 
 ---
 

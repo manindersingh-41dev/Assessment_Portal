@@ -100,6 +100,7 @@ class AssessmentSerializer(serializers.ModelSerializer):
             "total_marks",
             "instructions",
             "is_published",
+            "is_open_to_all_students",
             "published_at",
             "created_by",
             "created_by_email",
@@ -115,6 +116,7 @@ class AssessmentSerializer(serializers.ModelSerializer):
 class AssessmentCreateUpdateSerializer(serializers.ModelSerializer):
     """Create or update an assessment together with its selected questions."""
 
+    is_open_to_all_students = serializers.BooleanField(required=False)
     questions = AssessmentQuestionInputSerializer(many=True, required=False)
 
     class Meta:
@@ -131,11 +133,27 @@ class AssessmentCreateUpdateSerializer(serializers.ModelSerializer):
             "total_marks",
             "instructions",
             "is_published",
+            "is_open_to_all_students",
             "questions",
         ]
         read_only_fields = ["id"]
 
     def validate(self, attrs):
+        if (
+            self.instance
+            and (self.instance.is_published or self.instance.published_at)
+            and "is_open_to_all_students" in attrs
+            and attrs["is_open_to_all_students"]
+            != self.instance.is_open_to_all_students
+        ):
+            raise serializers.ValidationError(
+                {
+                    "is_open_to_all_students": (
+                        "Student access cannot be changed after publication."
+                    )
+                }
+            )
+
         start_time = attrs.get("start_time", getattr(self.instance, "start_time", None))
         end_time = attrs.get("end_time", getattr(self.instance, "end_time", None))
         if start_time and end_time and end_time <= start_time:

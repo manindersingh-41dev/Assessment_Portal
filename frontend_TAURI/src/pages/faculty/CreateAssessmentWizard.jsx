@@ -10,7 +10,7 @@ import { config } from '../../constants/config';
 import QuestionCreateModal from './QuestionCreateModal';
 import BulkQuestionImportModal from './BulkQuestionImportModal';
 
-const STEPS = ['Basic details', 'Questions', 'Settings', 'Assign students', 'Review & publish'];
+const STEPS = ['Basic details', 'Questions', 'Settings', 'Student access', 'Review & publish'];
 const endpoints = config.api.endpoints;
 
 const asList = (data) => {
@@ -82,6 +82,7 @@ const CreateAssessmentWizard = ({ isEdit = false, assessmentId = null }) => {
     instructions: '',
     duration_minutes: 60,
     is_timed: true,
+    is_open_to_all_students: true,
     start_time: '',
     end_time: '',
     selected_questions: [],
@@ -90,6 +91,7 @@ const CreateAssessmentWizard = ({ isEdit = false, assessmentId = null }) => {
 
   const navigate = useNavigate();
   const addNotification = useNotificationStore((state) => state.addNotification);
+  const canEditStudents = !isEdit || (!assessment?.is_published && !assessment?.published_at);
   const totalMarks = useMemo(
     () => formData.selected_questions.reduce((sum, question) => sum + Number(question.marks || 0), 0),
     [formData.selected_questions],
@@ -156,6 +158,7 @@ const CreateAssessmentWizard = ({ isEdit = false, assessmentId = null }) => {
             instructions: current.instructions || '',
             duration_minutes: current.duration_minutes || 60,
             is_timed: current.is_timed !== false,
+            is_open_to_all_students: current.is_open_to_all_students !== false,
             start_time: toDateTimeInput(current.start_time || current.start_datetime),
             end_time: toDateTimeInput(current.end_time || current.end_datetime),
             selected_questions: getAssessmentQuestions(current),
@@ -298,6 +301,11 @@ const CreateAssessmentWizard = ({ isEdit = false, assessmentId = null }) => {
         return false;
       }
     }
+    if (step === 3 && canEditStudents
+      && !formData.is_open_to_all_students && selectedStudents.length === 0) {
+      addNotification('Select at least one student, or make the assessment available to all students.', 'warning');
+      return false;
+    }
     return true;
   };
 
@@ -311,6 +319,7 @@ const CreateAssessmentWizard = ({ isEdit = false, assessmentId = null }) => {
     instructions: formData.instructions,
     duration_minutes: Number(formData.duration_minutes),
     is_timed: formData.is_timed,
+    is_open_to_all_students: formData.is_open_to_all_students,
     start_time: new Date(formData.start_time).toISOString(),
     end_time: new Date(formData.end_time).toISOString(),
     total_marks: totalMarks,
@@ -326,7 +335,7 @@ const CreateAssessmentWizard = ({ isEdit = false, assessmentId = null }) => {
       await api.post(endpoints.assessments.publish(id));
       setAssessment((current) => ({ ...current, is_published: true, status: 'active' }));
     }
-    if (selectedStudents.length > 0) {
+    if (!formData.is_open_to_all_students && selectedStudents.length > 0) {
       await api.post(endpoints.assessments.assign(id), { student_ids: selectedStudents });
     }
   };
@@ -358,9 +367,9 @@ const CreateAssessmentWizard = ({ isEdit = false, assessmentId = null }) => {
       if (!id) throw new Error('The server did not return an assessment ID.');
       await publishAndAssign(id);
       addNotification(
-        selectedStudents.length
-          ? 'Assessment published and assigned successfully.'
-          : 'Assessment published successfully.',
+        formData.is_open_to_all_students
+          ? 'Assessment published for all current and future students.'
+          : 'Assessment published and assigned to the selected students.',
         'success',
       );
       navigate('/faculty/assessments');
@@ -379,8 +388,6 @@ const CreateAssessmentWizard = ({ isEdit = false, assessmentId = null }) => {
   if (initialLoading) {
     return <div className="mx-auto max-w-5xl p-6 text-center text-slate-500">Loading assessment…</div>;
   }
-
-  const canEditStudents = !isEdit || !assessment?.is_published;
 
   return (
     <div className="mx-auto max-w-6xl space-y-6 p-4 sm:p-6">
@@ -569,53 +576,81 @@ const CreateAssessmentWizard = ({ isEdit = false, assessmentId = null }) => {
           <div className="space-y-5">
             <div className="flex flex-wrap items-end justify-between gap-3">
               <div>
-                <CardTitle>Assign students</CardTitle>
-                <CardDescription>Choose who should receive this assessment.</CardDescription>
+                <CardTitle>Who can access this assessment?</CardTitle>
+                <CardDescription>By default, every registered student can see it, including students who register later.</CardDescription>
               </div>
-              <Badge variant="info"><Users size={13} className="mr-1" />{selectedStudents.length} selected</Badge>
+              <Badge variant="info"><Users size={13} className="mr-1" />
+                {formData.is_open_to_all_students ? 'All current and future students' : `${selectedStudents.length} selected`}
+              </Badge>
             </div>
-            {studentsUnavailable && (
+            <fieldset disabled={!canEditStudents} className="grid gap-3 md:grid-cols-2">
+              <legend className="sr-only">Assessment audience</legend>
+              <label className={`flex cursor-pointer gap-3 rounded-xl border p-4 transition ${formData.is_open_to_all_students ? 'border-primary-500 bg-primary-50 dark:bg-primary-950/30' : 'border-slate-200 dark:border-slate-700'}`}>
+                <input type="radio" name="assessment-audience" checked={formData.is_open_to_all_students}
+                  onChange={() => updateField('is_open_to_all_students', true)} className="mt-1" />
+                <span>
+                  <span className="block text-sm font-semibold">All current and future students</span>
+                  <span className="mt-1 block text-xs text-slate-500">Any student can see and start this assessment after it is published.</span>
+                </span>
+              </label>
+              <label className={`flex cursor-pointer gap-3 rounded-xl border p-4 transition ${!formData.is_open_to_all_students ? 'border-primary-500 bg-primary-50 dark:bg-primary-950/30' : 'border-slate-200 dark:border-slate-700'}`}>
+                <input type="radio" name="assessment-audience" checked={!formData.is_open_to_all_students}
+                  onChange={() => updateField('is_open_to_all_students', false)} className="mt-1" />
+                <span>
+                  <span className="block text-sm font-semibold">Selected students only</span>
+                  <span className="mt-1 block text-xs text-slate-500">Choose registered students below. Later registrations will not be included.</span>
+                </span>
+              </label>
+            </fieldset>
+            {formData.is_open_to_all_students && (
+              <Alert type="info">All students can find this assessment in their dashboard. New registrations will receive access automatically.</Alert>
+            )}
+            {!formData.is_open_to_all_students && studentsUnavailable && (
               <Alert type="warning" title="Student directory unavailable">
-                The student list could not be loaded. You can publish now and assign students later from the assessment page.
+                The student list could not be loaded. Try again before publishing a student-specific assessment.
               </Alert>
             )}
-            {isEdit && assessment?.is_published && (
+            {!formData.is_open_to_all_students && isEdit && (assessment?.is_published || assessment?.published_at) && (
               <Alert type="info">
-                Existing assignments can be kept or added here. The current API does not remove assignments when a student is unchecked.
+                Existing assignments remain in place. You can add students here; unchecking a student does not revoke an existing assignment.
               </Alert>
             )}
             {!canEditStudents && (
               <Alert type="info">Student assignments are managed through the assignment endpoint.</Alert>
             )}
-            <div className="flex flex-col gap-3 sm:flex-row">
-              <div className="relative flex-1">
-                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                <Input aria-label="Search students" placeholder="Search by name or email…" value={studentSearch}
-                  className="pl-9" onChange={(event) => setStudentSearch(event.target.value)} />
-              </div>
-              <Button variant="secondary" onClick={() => setSelectedStudents(students.map((student) => student.id))}
-                disabled={students.length === 0}>Select all</Button>
-              <Button variant="ghost" onClick={() => setSelectedStudents([])} disabled={selectedStudents.length === 0}>Clear</Button>
-            </div>
-            <div className="max-h-80 overflow-y-auto rounded-xl border border-slate-200 dark:border-slate-700">
-              {filteredStudents.map((student) => (
-                <label key={student.id} className="flex cursor-pointer items-center gap-3 border-b border-slate-100 p-3 last:border-0 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800/60">
-                  <input type="checkbox" checked={selectedStudents.includes(student.id)} onChange={() => toggleStudent(student.id)}
-                    className="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium text-slate-900 dark:text-white">
-                      {[student.first_name, student.last_name].filter(Boolean).join(' ') || student.email}
-                    </span>
-                    <span className="block truncate text-xs text-slate-500">{student.email}</span>
-                  </span>
-                </label>
-              ))}
-              {filteredStudents.length === 0 && (
-                <p className="p-8 text-center text-sm text-slate-500">
-                  {students.length ? 'No students match that search.' : 'No students are available to assign.'}
-                </p>
-              )}
-            </div>
+            {!formData.is_open_to_all_students && (
+              <>
+                <div className="flex flex-col gap-3 sm:flex-row">
+                  <div className="relative flex-1">
+                    <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <Input aria-label="Search students" placeholder="Search by name or email…" value={studentSearch}
+                      className="pl-9" onChange={(event) => setStudentSearch(event.target.value)} />
+                  </div>
+                  <Button variant="secondary" onClick={() => setSelectedStudents(students.map((student) => student.id))}
+                    disabled={students.length === 0}>Select all</Button>
+                  <Button variant="ghost" onClick={() => setSelectedStudents([])} disabled={selectedStudents.length === 0}>Clear</Button>
+                </div>
+                <div className="max-h-80 overflow-y-auto rounded-xl border border-slate-200 dark:border-slate-700">
+                  {filteredStudents.map((student) => (
+                    <label key={student.id} className="flex cursor-pointer items-center gap-3 border-b border-slate-100 p-3 last:border-0 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800/60">
+                      <input type="checkbox" checked={selectedStudents.includes(student.id)} onChange={() => toggleStudent(student.id)}
+                        className="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-medium text-slate-900 dark:text-white">
+                          {[student.first_name, student.last_name].filter(Boolean).join(' ') || student.email}
+                        </span>
+                        <span className="block truncate text-xs text-slate-500">{student.email}</span>
+                      </span>
+                    </label>
+                  ))}
+                  {filteredStudents.length === 0 && (
+                    <p className="p-8 text-center text-sm text-slate-500">
+                      {students.length ? 'No students match that search.' : 'No students are available to assign.'}
+                    </p>
+                  )}
+                </div>
+              </>
+            )}
           </div>
         )}
 
@@ -646,11 +681,13 @@ const CreateAssessmentWizard = ({ isEdit = false, assessmentId = null }) => {
               </div>
             </div>
             <div className="rounded-lg border border-slate-200 p-4 dark:border-slate-700">
-              <p className="text-sm font-semibold">Students to assign: {selectedStudents.length}</p>
+              <p className="text-sm font-semibold">
+                {formData.is_open_to_all_students ? 'Access: all current and future students' : `Students to assign: ${selectedStudents.length}`}
+              </p>
               <p className="mt-1 text-sm text-slate-500">
-                {selectedStudents.length
-                  ? 'The assessment will be published first, then assigned to the selected students.'
-                  : 'The assessment will be published without student assignments.'}
+                {formData.is_open_to_all_students
+                  ? 'Every registered student can see this assessment after publication, including students who register later.'
+                  : 'The assessment will be published only for the selected students.'}
               </p>
             </div>
             <div>

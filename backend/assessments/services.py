@@ -157,6 +157,40 @@ class AssignmentService:
 
     @staticmethod
     @transaction.atomic
+    def ensure_open_assessment_assignments(student):
+        """Create a student's assignment rows for every published open assessment."""
+        open_assessments = list(
+            Assessment.objects.filter(
+                is_published=True,
+                is_open_to_all_students=True,
+            ).values_list('id', 'created_by_id')
+        )
+        if not open_assessments:
+            return
+
+        existing_assessment_ids = set(
+            AssessmentAssignment.objects.filter(
+                student=student,
+                assessment_id__in=[assessment_id for assessment_id, _ in open_assessments],
+            ).values_list('assessment_id', flat=True)
+        )
+        missing_assignments = [
+            AssessmentAssignment(
+                assessment_id=assessment_id,
+                student=student,
+                created_by_id=created_by_id,
+            )
+            for assessment_id, created_by_id in open_assessments
+            if assessment_id not in existing_assessment_ids
+        ]
+        if missing_assignments:
+            AssessmentAssignment.objects.bulk_create(
+                missing_assignments,
+                ignore_conflicts=True,
+            )
+
+    @staticmethod
+    @transaction.atomic
     def create_assignments(assessment, student_ids=None, batch_ids=None, deadline=None):
         """Create assignments for students or batches."""
         if not student_ids:

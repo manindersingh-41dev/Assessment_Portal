@@ -8,7 +8,7 @@ from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
-from django.db.models import Count, F, prefetch_related_objects
+from django.db.models import Count, F, Q, prefetch_related_objects
 from django.db import transaction
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
@@ -75,10 +75,12 @@ class AssessmentViewSet(viewsets.ModelViewSet):
                 assignment_count=Count('assignments', distinct=True)
             ).order_by(F('published_at').desc(nulls_last=True), '-created_at')
         elif user.role == 'student':
-            # Students see only published assessments assigned to them
+            # Published open assessments are available to all students; targeted
+            # assessments remain visible only to students with an assignment.
             return Assessment.objects.filter(
-                is_published=True,
-                assignments__student=user
+                is_published=True
+            ).filter(
+                Q(assignments__student=user) | Q(is_open_to_all_students=True)
             ).distinct().annotate(
                 question_count=Count('assessment_questions', distinct=True),
                 assignment_count=Count('assignments', distinct=True)
@@ -358,10 +360,12 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
             ).prefetch_related('notifications').order_by('-created_at')
 
         elif user.role == 'student':
-            # Students see their own assignments
+            # Materialize assignments for open assessments on demand so the
+            # existing attempt and progress APIs work for current and future students.
+            AssignmentService.ensure_open_assessment_assignments(user)
             return AssessmentAssignment.objects.filter(
                 student=user
-            ).order_by('-created_at')
+            ).select_related('assessment').order_by('-created_at')
 
         return AssessmentAssignment.objects.none()
 

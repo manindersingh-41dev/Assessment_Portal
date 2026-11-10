@@ -18,8 +18,8 @@ class Assessment(UUIDModel, TimeStampedModel, CreatedByModel):
     An assessment (exam/quiz) created by faculty.
 
     Contains a set of questions via ``AssessmentQuestion`` and is assigned to
-    students via ``AssessmentAssignment``. Students can attempt it only within
-    the [start_time, end_time] window if assigned.
+    students via ``AssessmentAssignment`` or made available to all students.
+    Students can attempt it only within the [start_time, end_time] window.
     """
 
     class Status(models.TextChoices):
@@ -65,7 +65,15 @@ class Assessment(UUIDModel, TimeStampedModel, CreatedByModel):
     is_published = models.BooleanField(
         _("published"),
         default=False,
-        help_text="Only published assessments are visible to assigned students.",
+        help_text="Only published assessments are visible to students.",
+    )
+    is_open_to_all_students = models.BooleanField(
+        _("open to all students"),
+        default=True,
+        help_text=(
+            "When published, any registered student can see and attempt this "
+            "assessment. Turn off to restrict access to assigned students."
+        ),
     )
     published_at = models.DateTimeField(
         _("published at"),
@@ -89,6 +97,10 @@ class Assessment(UUIDModel, TimeStampedModel, CreatedByModel):
                 name="assessment_created_by_idx",
             ),
             models.Index(fields=["is_published"], name="assessment_published_idx"),
+            models.Index(
+                fields=["is_published", "is_open_to_all_students"],
+                name="assessment_public_students_idx",
+            ),
         ]
         constraints = [
             models.CheckConstraint(
