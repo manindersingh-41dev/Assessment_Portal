@@ -10,6 +10,7 @@ import ProtectedRoute from './utils/ProtectedRoute.jsx';
 import AuthLayout from './layouts/AuthLayout.jsx';
 import AppLayout from './layouts/AppLayout.jsx';
 import CodingLayout from './layouts/CodingLayout.jsx';
+import StudentPortalProtection from './layouts/StudentPortalProtection.jsx';
 
 import LoginPage from './pages/LoginPage.jsx';
 import RegisterPage from './pages/RegisterPage.jsx';
@@ -54,8 +55,8 @@ export function App() {
             <Route path="/reset-password" element={<ResetPasswordPage />} />
           </Route>
 
-          <Route element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
-            <Route element={<ProtectedRoute requiredRole="student" />}>
+          <Route element={<ProtectedRoute requiredRole="student"><StudentPortalProtection /></ProtectedRoute>}>
+            <Route element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
               <Route path="/dashboard" element={<StudentDashboard />} />
               <Route path="/student/dashboard" element={<StudentDashboard />} />
               <Route path="/student/assessments" element={<StudentDashboard />} />
@@ -67,7 +68,12 @@ export function App() {
               <Route path="/student/results" element={<StudentResultsPage />} />
               <Route path="/student/profile" element={<FacultyProfilePage />} />
             </Route>
+            <Route element={<CodingLayout />}>
+              <Route path="/assessment/:id" element={<AssessmentAttemptPage />} />
+            </Route>
+          </Route>
 
+          <Route element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
             <Route element={<ProtectedRoute requiredRole="faculty" />}>
               <Route path="/faculty/dashboard" element={<FacultyDashboard />} />
               <Route path="/faculty/questions" element={<QuestionBankPage />} />
@@ -80,10 +86,6 @@ export function App() {
               <Route path="/faculty/results" element={<ResultsPage />} />
               <Route path="/faculty/profile" element={<FacultyProfilePage />} />
             </Route>
-          </Route>
-
-          <Route element={<ProtectedRoute requiredRole="student"><CodingLayout /></ProtectedRoute>}>
-            <Route path="/assessment/:id" element={<AssessmentAttemptPage />} />
           </Route>
 
           <Route path="*" element={<NotFoundPage />} />

@@ -208,17 +208,30 @@ class AssessmentCreateUpdateSerializer(serializers.ModelSerializer):
             validated_data["published_at"] = timezone.now()
         assessment = super().create(validated_data)
         self._replace_questions(assessment, questions)
+        if assessment.is_published:
+            from assessments.notifications import send_assessment_publication_notifications
+
+            transaction.on_commit(
+                lambda: send_assessment_publication_notifications(assessment)
+            )
         return assessment
 
     @transaction.atomic
     def update(self, instance, validated_data):
         questions = validated_data.pop("questions", None)
+        was_published = instance.is_published
         assessment = super().update(instance, validated_data)
         if assessment.is_published and assessment.published_at is None:
             assessment.published_at = timezone.now()
             assessment.save(update_fields=["published_at", "updated_at"])
         if questions is not None:
             self._replace_questions(assessment, questions)
+        if assessment.is_published and not was_published:
+            from assessments.notifications import send_assessment_publication_notifications
+
+            transaction.on_commit(
+                lambda: send_assessment_publication_notifications(assessment)
+            )
         return assessment
 
 
@@ -265,6 +278,10 @@ class AssessmentAssignmentSerializer(serializers.ModelSerializer):
             "started_at",
             "submitted_at",
             "due_at",
+            "is_flagged_cheating",
+            "cheating_flag_reason",
+            "cheating_flag_speed_wpm",
+            "cheating_flagged_at",
             "created_at",
             "updated_at",
             "email_notifications",

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { ArrowLeft, CalendarClock, ClipboardList, Clock3, Pencil, Users } from 'lucide-react';
+import { ArrowLeft, CalendarClock, ClipboardList, Clock3, Pencil, ShieldAlert, Users } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Button } from '../../components/Button';
 import { Alert, Badge, Card, CardDescription, CardTitle } from '../../components/Common';
@@ -229,6 +229,12 @@ const AssessmentDetailsPage = () => {
                     <p className="mt-0.5 truncate text-xs text-slate-500">{assignment.student_email || assignment.student.email}</p>
                   )}
                   <div className="mt-2"><Badge variant={assignment.status === 'submitted' || assignment.status === 'graded' ? 'success' : 'neutral'}>{assignment.status || 'assigned'}</Badge></div>
+                  {assignment.is_flagged_cheating && (
+                    <div className="mt-2 rounded-lg border border-rose-900/40 bg-rose-50 p-2 text-xs text-rose-800 dark:bg-rose-950/30 dark:text-rose-200">
+                      <p className="font-semibold"><ShieldAlert size={14} className="mr-1 inline" />Cheating review flag</p>
+                      <p className="mt-1">Code-writing speed: {Math.round(assignment.cheating_flag_speed_wpm || 0)} WPM</p>
+                    </div>
+                  )}
                   {notifications.length > 0 && (
                     <div className="mt-3 space-y-2 border-t border-slate-100 pt-2 dark:border-slate-800">
                       {notifications.map((notification) => (
@@ -241,7 +247,7 @@ const AssessmentDetailsPage = () => {
                           </div>
                           {notification.recipient_count > 1 && (
                             <p className="mt-1 text-slate-500">
-                              One group email to {notification.recipient_count} students (one in To, others in CC).
+                              One group email to {notification.recipient_count} students (one in To, others in BCC).
                             </p>
                           )}
                           {notification.status === 'failed' && notification.last_error && (

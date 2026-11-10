@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Main assessment portal window",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "core:window:allow-set-fullscreen"]
 }

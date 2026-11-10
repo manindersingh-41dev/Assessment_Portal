@@ -26,6 +26,29 @@ import { createWasmRunner, RUNNER_TYPE, WASM_COMPILER_VERSION, WASM_RUNNER_VERSI
 const endpoints = config.api.endpoints;
 const DEFAULT_CODE = '#include <stdio.h>\n\nint main(void) {\n    // Write your solution here\n    return 0;\n}\n';
 const FINAL_STATES = new Set(['completed', 'failed']);
+const CODE_SPEED_WINDOW_MS = 10_000;
+const CODE_SPEED_LIMIT_WPM = 60;
+const CHARACTERS_PER_WORD = 5;
+
+const countInsertedCharacters = (previousCode, nextCode) => {
+  let prefixLength = 0;
+  const maxPrefix = Math.min(previousCode.length, nextCode.length);
+  while (prefixLength < maxPrefix && previousCode[prefixLength] === nextCode[prefixLength]) {
+    prefixLength += 1;
+  }
+
+  let suffixLength = 0;
+  while (
+    suffixLength < previousCode.length - prefixLength
+    && suffixLength < nextCode.length - prefixLength
+    && previousCode[previousCode.length - 1 - suffixLength]
+      === nextCode[nextCode.length - 1 - suffixLength]
+  ) {
+    suffixLength += 1;
+  }
+
+  return Math.max(0, nextCode.length - prefixLength - suffixLength);
+};
 
 const asList = (data) => {
   if (Array.isArray(data)) return data;
@@ -55,6 +78,8 @@ const getErrorMessage = (error, fallback) => {
   }
   return error?.message || fallback;
 };
+
+const getTauriWindow = () => window.__TAURI__?.window?.getCurrentWindow?.() || null;
 
 const getQuestionLinks = (assessment) => {
   const links = assessment?.questions || assessment?.assessment_questions || [];
@@ -199,6 +224,9 @@ const AssessmentAttemptPage = () => {
   const [polling, setPolling] = useState(false);
   const [integrityWarnings, setIntegrityWarnings] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [startingAttempt, setStartingAttempt] = useState(false);
+  const [startError, setStartError] = useState('');
+  const [cheatingFlagSyncStatus, setCheatingFlagSyncStatus] = useState('');
   const [resultsHeightPercent, setResultsHeightPercent] = useState(36);
   const [resultsHeightPx, setResultsHeightPx] = useState(260);
   const [resizingResults, setResizingResults] = useState(false);
@@ -225,6 +253,8 @@ const AssessmentAttemptPage = () => {
   const runnerGenerationRef = useRef(0);
   const attemptRootRef = useRef(null);
   const workspacePanelsRef = useRef(null);
+  const codeInsertionSamplesRef = useRef([]);
+  const cheatingFlagRequestRef = useRef(false);
 
   useEffect(() => {
     runnerGenerationRef.current += 1;
@@ -263,7 +293,11 @@ const AssessmentAttemptPage = () => {
   const currentSubmission = currentQuestion ? submissionStatuses[currentQuestion.id] : null;
   const currentSubmissionPending = Boolean(currentSubmission && !FINAL_STATES.has(currentSubmission.status));
   const currentQuestionSubmitting = Boolean(currentQuestion && submittingQuestionIds.has(currentQuestion.id));
-  const canEdit = !finalized && (assessment?.is_timed === false || remainingSeconds > 0);
+  const canEdit = isFullscreen
+    && assignment?.status === 'started'
+    && !assignment?.is_flagged_cheating
+    && !finalized
+    && (assessment?.is_timed === false || remainingSeconds > 0);
   const questionStatuses = useMemo(() => questions.map((question) => submissionStatuses[question.id]), [questions, submissionStatuses]);
   const completedSubmissions = questionStatuses.filter((status) => FINAL_STATES.has(status?.status)).length;
   const questionsNeedingWork = questions.filter((question) => {
@@ -535,7 +569,12 @@ const AssessmentAttemptPage = () => {
       setRemainingSeconds(0);
       setDraftSaveStatus('saved');
       setFinalized(false);
+      setStartingAttempt(false);
+      setStartError('');
+      setCheatingFlagSyncStatus('');
       setCurrentQuestionIndex(0);
+      codeInsertionSamplesRef.current = [];
+      cheatingFlagRequestRef.current = false;
       autoSubmitTriggeredRef.current = false;
       submissionIdsRef.current = {};
       submissionStatusesRef.current = {};
@@ -561,14 +600,10 @@ const AssessmentAttemptPage = () => {
         if (!questionRows.length) throw new Error('This assessment does not have any available questions.');
 
         let activeAssignment = myAssignment;
-        if (activeAssignment.status === 'assigned') {
-          const startResponse = await api.post(endpoints.assessments.startAssignment(activeAssignment.id), {}, { signal });
-          activeAssignment = startResponse.data?.assignment || startResponse.data;
-        }
         if (activeAssignment.status === 'expired') {
           throw new Error('This assessment assignment has expired.');
         }
-        if (!['started', 'submitted', 'graded'].includes(activeAssignment.status)) {
+        if (!['assigned', 'started', 'submitted', 'graded'].includes(activeAssignment.status)) {
           throw new Error('This assessment could not be started. Return to the details page and try again during its scheduled window.');
         }
         if (activeAssignment.status === 'started' && !activeAssignment.started_at) {
@@ -585,6 +620,8 @@ const AssessmentAttemptPage = () => {
         }
         setAssessment(currentAssessment);
         setAssignment(activeAssignment);
+        cheatingFlagRequestRef.current = Boolean(activeAssignment.is_flagged_cheating);
+        if (activeAssignment.is_flagged_cheating) setCheatingFlagSyncStatus('saved');
         setQuestions(questionRows);
         setCodes(codeMap);
         codeRef.current = codeMap;
@@ -879,6 +916,18 @@ const AssessmentAttemptPage = () => {
   }, [submissionIds, updateQuestionSubmissionStatus, updateSubmissionStatusError]);
 
   useEffect(() => {
+    const syncFullscreen = async () => {
+      const tauriWindow = getTauriWindow();
+      if (tauriWindow) {
+        try {
+          setIsFullscreen(await tauriWindow.isFullscreen());
+        } catch {
+          setIsFullscreen(false);
+        }
+        return;
+      }
+      setIsFullscreen(document.fullscreenElement === attemptRootRef.current);
+    };
     const onVisibilityChange = () => {
       if (document.visibilityState !== 'hidden' || finalized) return;
       Object.entries(codeRef.current).forEach(([questionId, sourceCode]) => {
@@ -888,7 +937,7 @@ const AssessmentAttemptPage = () => {
       setIntegrityWarnings((count) => count + 1);
       addNotification('Leaving the assessment tab has been detected.', 'warning');
     };
-    const onFullscreenChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    const onFullscreenChange = () => { void syncFullscreen(); };
     const onClipboard = (event) => {
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -910,6 +959,10 @@ const AssessmentAttemptPage = () => {
     document.addEventListener('paste', onClipboard, true);
     document.addEventListener('keydown', onKeyDown, true);
     document.addEventListener('fullscreenchange', onFullscreenChange);
+    void syncFullscreen();
+    const fullscreenPoll = assignment?.status === 'started' && !finalized
+      ? window.setInterval(syncFullscreen, 750)
+      : null;
     return () => {
       document.removeEventListener('visibilitychange', onVisibilityChange);
       document.removeEventListener('copy', onClipboard, true);
@@ -917,10 +970,62 @@ const AssessmentAttemptPage = () => {
       document.removeEventListener('paste', onClipboard, true);
       document.removeEventListener('keydown', onKeyDown, true);
       document.removeEventListener('fullscreenchange', onFullscreenChange);
+      if (fullscreenPoll) window.clearInterval(fullscreenPoll);
     };
-  }, [addNotification, assessment?.is_timed, finalized, saveDraftNow]);
+  }, [addNotification, assessment?.is_timed, assignment?.status, finalized, saveDraftNow]);
 
-  const updateCode = (questionId, nextCode) => {
+  const flagHighCodeSpeed = (speedWpm) => {
+    if (
+      !assignment?.id
+      || assignment.status !== 'started'
+      || cheatingFlagRequestRef.current
+    ) return;
+
+    cheatingFlagRequestRef.current = true;
+    setCheatingFlagSyncStatus('saving');
+    setAssignment((current) => ({
+      ...current,
+      is_flagged_cheating: true,
+      cheating_flag_reason: 'high_code_writing_speed',
+      cheating_flag_speed_wpm: speedWpm,
+      cheating_flagged_at: new Date().toISOString(),
+    }));
+
+    api.post(endpoints.assessments.flagCheating(assignment.id), {
+      reason: 'high_code_writing_speed',
+      speed_wpm: speedWpm,
+    }).then((response) => {
+      const savedAssignment = response.data?.assignment;
+      if (savedAssignment) setAssignment((current) => ({ ...current, ...savedAssignment }));
+      setCheatingFlagSyncStatus('saved');
+    }).catch((flagError) => {
+      setCheatingFlagSyncStatus('failed');
+      addNotification(
+        getErrorMessage(flagError, 'The cheating flag could not be saved to the server.'),
+        'error',
+      );
+    });
+  };
+
+  const updateCode = (questionId, nextCode, measureSpeed = true) => {
+    const previousCode = codeRef.current[questionId] ?? '';
+    if (measureSpeed && assignment?.status === 'started') {
+      const insertedCharacters = countInsertedCharacters(previousCode, nextCode);
+      if (insertedCharacters > 0) {
+        const now = Date.now();
+        const samples = codeInsertionSamplesRef.current.filter(
+          (sample) => now - sample.at < CODE_SPEED_WINDOW_MS,
+        );
+        samples.push({ at: now, characters: insertedCharacters });
+        codeInsertionSamplesRef.current = samples;
+        const charactersInWindow = samples.reduce((total, sample) => total + sample.characters, 0);
+        const elapsedMs = Math.max(1_000, now - samples[0].at);
+        const speedWpm = (charactersInWindow * 60_000)
+          / (CHARACTERS_PER_WORD * elapsedMs);
+        if (speedWpm > CODE_SPEED_LIMIT_WPM) flagHighCodeSpeed(speedWpm);
+      }
+    }
+
     const updated = { ...codeRef.current, [questionId]: nextCode };
     codeRef.current = updated;
     setCodes(updated);
@@ -1044,21 +1149,80 @@ const AssessmentAttemptPage = () => {
 
   const resetCurrentCode = () => {
     if (!currentQuestion) return;
-    updateCode(currentQuestion.id, DEFAULT_CODE);
+    updateCode(currentQuestion.id, DEFAULT_CODE, false);
+  };
+
+  const requestAttemptFullscreen = async () => {
+    const tauriWindow = getTauriWindow();
+    if (tauriWindow) {
+      if (!await tauriWindow.isFullscreen()) await tauriWindow.setFullscreen(true);
+      const fullscreen = await tauriWindow.isFullscreen();
+      setIsFullscreen(fullscreen);
+      return fullscreen;
+    }
+
+    if (document.fullscreenElement !== attemptRootRef.current) {
+      if (!attemptRootRef.current?.requestFullscreen) {
+        throw new Error('This browser does not support fullscreen assessments.');
+      }
+      await attemptRootRef.current.requestFullscreen();
+    }
+    const fullscreen = document.fullscreenElement === attemptRootRef.current;
+    setIsFullscreen(fullscreen);
+    return fullscreen;
   };
 
   const enterFullscreen = async () => {
     try {
-      if (!document.fullscreenElement) await attemptRootRef.current?.requestFullscreen?.();
-      else await document.exitFullscreen?.();
-    } catch {
-      addNotification('Fullscreen is unavailable in this browser.', 'warning');
+      await requestAttemptFullscreen();
+    } catch (fullscreenError) {
+      addNotification(
+        getErrorMessage(fullscreenError, 'Fullscreen is unavailable in this browser.'),
+        'warning',
+      );
+    }
+  };
+
+  const startAssessmentInFullscreen = async () => {
+    if (!assignment?.id || !assessment || startingAttempt) return;
+    setStartingAttempt(true);
+    setStartError('');
+    try {
+      if (!await requestAttemptFullscreen()) {
+        throw new Error('Fullscreen is required to start this assessment.');
+      }
+
+      const response = await api.post(
+        endpoints.assessments.startAssignment(assignment.id),
+        {},
+      );
+      const startedAssignment = response.data?.assignment || response.data;
+      setAssignment(startedAssignment);
+      const deadline = effectiveDeadline(assessment, startedAssignment);
+      if (Number.isFinite(deadline)) {
+        setDeadlineAt(deadline);
+        setRemainingSeconds(Math.max(0, Math.ceil((deadline - Date.now()) / 1000)));
+      }
+    } catch (startErrorDetails) {
+      setStartError(getErrorMessage(startErrorDetails, 'Fullscreen is required to start the assessment.'));
+    } finally {
+      setStartingAttempt(false);
     }
   };
 
   const exitAttempt = async () => {
     setShowExitConfirm(false);
     await flushDrafts();
+    try {
+      const tauriWindow = getTauriWindow();
+      if (tauriWindow && await tauriWindow.isFullscreen()) {
+        await tauriWindow.setFullscreen(false);
+      } else if (document.fullscreenElement === attemptRootRef.current) {
+        await document.exitFullscreen();
+      }
+    } catch {
+      // Leave the attempt even if the platform rejects the fullscreen change.
+    }
     if (assessment) navigate(`/student/assessments/${assessment.id}`);
     else navigate('/student/assessments');
   };
@@ -1098,9 +1262,33 @@ const AssessmentAttemptPage = () => {
       className="flex min-h-dvh min-w-0 flex-col bg-slate-950 text-slate-100 lg:h-dvh lg:min-h-0 lg:overflow-hidden"
       onContextMenu={(event) => event.preventDefault()}
     >
+      {assignment.status === 'assigned' ? (
+        <section className="mx-auto flex min-h-dvh w-full max-w-2xl flex-col justify-center gap-5 px-5 py-12">
+          <div className="space-y-3">
+            <Badge variant="info">Fullscreen required</Badge>
+            <h1 className="text-2xl font-bold text-white">{assessment.title}</h1>
+            <p className="text-sm leading-6 text-slate-300">
+              Enter fullscreen to start. The assessment timer begins after you enter fullscreen.
+            </p>
+            {assessment.instructions && (
+              <div className="rounded-xl border border-slate-700 bg-slate-900 p-4 text-sm leading-6 text-slate-300">
+                {assessment.instructions}
+              </div>
+            )}
+          </div>
+          {startError && <Alert type="error">{startError}</Alert>}
+          <div className="flex flex-wrap gap-3">
+            <Button variant="ghost" onClick={exitAttempt} disabled={startingAttempt}>Back to assessment details</Button>
+            <Button onClick={startAssessmentInFullscreen} loading={startingAttempt} disabled={startingAttempt}>
+              Enter fullscreen and start assessment
+            </Button>
+          </div>
+        </section>
+      ) : (
+        <>
       <header className="z-10 flex min-h-16 shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-800 bg-slate-900 px-3 py-2 sm:px-5">
         <div className="flex min-w-0 items-center gap-3">
-          <Button size="sm" variant="ghost" aria-label="Leave assessment" onClick={() => setShowExitConfirm(true)}>
+          <Button size="sm" variant="ghost" aria-label="Leave assessment" disabled={assignment.status === 'started' && !finalized} onClick={() => setShowExitConfirm(true)}>
             <ArrowLeft size={17} />
           </Button>
           <div className="min-w-0">
@@ -1117,11 +1305,42 @@ const AssessmentAttemptPage = () => {
           <div className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 font-mono text-sm font-bold tabular-nums ${timerUrgent ? 'border-rose-500/50 bg-rose-950/60 text-rose-200' : 'border-slate-700 bg-slate-800 text-slate-100'}`} aria-live="polite" aria-label={deadlineAt ? `Time remaining ${remainingLabel}` : 'No time limit'}>
             <Clock3 size={16} />{deadlineAt ? remainingLabel : 'No time limit'}
           </div>
-          <Button size="sm" variant="ghost" onClick={enterFullscreen} aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'} title={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}>
+          <Button size="sm" variant="ghost" onClick={enterFullscreen}
+            disabled={isFullscreen && assignment.status === 'started' && !finalized}
+            aria-label={isFullscreen ? 'Fullscreen active' : 'Return to fullscreen'}
+            title={isFullscreen ? 'Fullscreen active' : 'Return to fullscreen'}>
             {isFullscreen ? <Minimize size={16} /> : <Maximize size={16} />}
           </Button>
         </div>
       </header>
+
+      {assignment.status === 'started' && !isFullscreen && !finalized && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/95 p-6" role="alertdialog" aria-modal="true" aria-labelledby="fullscreen-required-title">
+          <div className="max-w-md space-y-4 rounded-2xl border border-slate-700 bg-slate-900 p-6 text-center shadow-2xl">
+            <h2 id="fullscreen-required-title" className="text-xl font-bold text-white">Return to fullscreen</h2>
+            <p className="text-sm leading-6 text-slate-300">The assessment stays in progress, but coding and submission are paused until fullscreen is restored.</p>
+            <Button onClick={enterFullscreen}>Return to fullscreen</Button>
+          </div>
+        </div>
+      )}
+
+      {assignment.is_flagged_cheating && !finalized && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/95 p-6" role="alertdialog" aria-modal="true" aria-labelledby="cheating-flag-title">
+          <div className="max-w-lg space-y-4 rounded-2xl border border-rose-800 bg-slate-900 p-6 text-center shadow-2xl">
+            <ShieldAlert size={32} className="mx-auto text-rose-400" />
+            <h2 id="cheating-flag-title" className="text-xl font-bold text-white">Coding screen locked</h2>
+            <p className="text-sm leading-6 text-slate-300">
+              Code-writing speed exceeded 60 WPM. This attempt has been flagged for suspected cheating and is locked for faculty review.
+            </p>
+            <p className="text-sm font-semibold text-rose-200">
+              Recorded speed: {Math.round(assignment.cheating_flag_speed_wpm || 0)} WPM
+            </p>
+            {cheatingFlagSyncStatus === 'failed' && (
+              <p className="text-xs text-amber-200">The flag could not be saved to the server. Contact faculty before leaving this screen.</p>
+            )}
+          </div>
+        </div>
+      )}
 
       <nav className="flex shrink-0 items-center gap-2 overflow-x-auto border-b border-slate-800 bg-slate-900/70 px-3 py-2 sm:px-5" aria-label="Assessment questions">
         {questions.map((question, index) => {
@@ -1149,6 +1368,16 @@ const AssessmentAttemptPage = () => {
       <div className="shrink-0 border-b border-sky-900/60 bg-sky-950/30 px-4 py-2 text-xs text-sky-100" role="note">
         C code runs in your browser. The server decides your final score, and results can rarely differ from local GCC.
       </div>
+
+      {assignment.is_flagged_cheating && (
+        <div className="flex shrink-0 items-center gap-2 border-b border-rose-900/70 bg-rose-950/70 px-4 py-3 text-sm text-rose-100" role="alert">
+          <ShieldAlert size={17} />
+          <span>
+            Cheating review flag: code-writing speed reached {Math.round(assignment.cheating_flag_speed_wpm || 0)} WPM (limit: 60 WPM).
+            {' '}{cheatingFlagSyncStatus === 'failed' ? 'The flag could not be saved to the server.' : cheatingFlagSyncStatus === 'saving' ? 'Saving the flag…' : 'This attempt is flagged for faculty review.'}
+          </span>
+        </div>
+      )}
 
       {questionsNeedingWork > 0 && !finalized && (
         <div className="shrink-0 border-b border-rose-900/70 bg-rose-950/50 px-4 py-2 text-sm text-rose-100" role="status">
@@ -1416,6 +1645,8 @@ const AssessmentAttemptPage = () => {
             : 'The timer continues while you are away. Your work is autosaved, so you can return to finish before time expires.'}
         </p>
       </Modal>
+        </>
+      )}
     </div>
   );
 };

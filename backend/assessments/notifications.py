@@ -11,6 +11,7 @@ from django.db.models import F
 from django.utils import timezone
 
 from .models import AssessmentNotification
+from .services import AssignmentService
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +95,7 @@ def send_notification_group(notifications, batch_id=None):
         return {"status": "failed", "error": error}
 
     primary_recipient = random.choice(recipient_emails)
-    cc_recipients = [email for email in recipient_emails if email != primary_recipient]
+    bcc_recipients = [email for email in recipient_emails if email != primary_recipient]
     try:
         subject, message = _assignment_email_content(eligible[0])
         email = EmailMessage(
@@ -102,7 +103,7 @@ def send_notification_group(notifications, batch_id=None):
             body=message,
             from_email=settings.DEFAULT_FROM_EMAIL,
             to=[primary_recipient],
-            cc=cc_recipients,
+            bcc=bcc_recipients,
         )
         if email.send(fail_silently=False) != 1:
             raise RuntimeError("Email service did not accept the message.")
@@ -148,3 +149,17 @@ def send_assignment_notifications(assignments):
         notifications.append(notification)
 
     return send_notification_group(notifications, batch_id)
+
+
+def send_assessment_publication_notifications(assessment):
+    """Notify current recipients when an assessment is published."""
+    if assessment.is_open_to_all_students:
+        assignments = AssignmentService.create_assignments_for_all_students(
+            assessment
+        )
+    else:
+        assignments = list(
+            assessment.assignments.select_related('assessment', 'student').all()
+        )
+
+    return send_assignment_notifications(assignments)

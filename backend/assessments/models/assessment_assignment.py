@@ -68,6 +68,14 @@ class AssessmentAssignment(UUIDModel, TimeStampedModel, CreatedByModel):
         blank=True,
         help_text="Optional deadline for this specific assignment.",
     )
+    is_flagged_cheating = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text="Whether an integrity rule flagged this assessment attempt.",
+    )
+    cheating_flag_reason = models.CharField(max_length=64, blank=True)
+    cheating_flag_speed_wpm = models.FloatField(null=True, blank=True)
+    cheating_flagged_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         verbose_name = _("assessment assignment")

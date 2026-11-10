@@ -4,6 +4,8 @@ Views for Assessment Management.
 Handles all assessment-related endpoints including creation, assignment, and student access.
 """
 
+import math
+
 from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -35,7 +37,11 @@ from .permissions import (
     IsStudent
 )
 from .services import AssessmentService, AssignmentService
-from .notifications import send_assignment_notifications, send_notification_group
+from .notifications import (
+    send_assignment_notifications,
+    send_assessment_publication_notifications,
+    send_notification_group,
+)
 
 
 class AssessmentPagination(PageNumberPagination):
@@ -161,6 +167,7 @@ class AssessmentViewSet(viewsets.ModelViewSet):
     def publish(self, request, pk=None):
         """Publish assessment."""
         assessment = self.get_object()
+        was_published = assessment.is_published
 
         assessment.is_published = True
         assessment.status = Assessment.Status.ACTIVE
@@ -172,6 +179,8 @@ class AssessmentViewSet(viewsets.ModelViewSet):
             'published_at',
             'updated_at',
         ])
+        if not was_published:
+            send_assessment_publication_notifications(assessment)
 
         return Response(
             {
@@ -368,6 +377,61 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
             ).select_related('assessment').order_by('-created_at')
 
         return AssessmentAssignment.objects.none()
+
+    @action(detail=True, methods=['post'], url_path='flag-cheating')
+    def flag_cheating(self, request, pk=None):
+        """Persist a high code-writing-speed integrity flag for the student."""
+        assignment = self.get_object()
+        if request.user.role != 'student' or assignment.student_id != request.user.id:
+            return Response(
+                {'error': 'Only the assigned student can flag this attempt.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if assignment.status != AssessmentAssignment.Status.STARTED:
+            return Response(
+                {'error': 'Only an in-progress assessment can be flagged.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if request.data.get('reason') != 'high_code_writing_speed':
+            return Response(
+                {'error': 'Unsupported integrity flag reason.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            speed_wpm = float(request.data.get('speed_wpm'))
+        except (TypeError, ValueError):
+            speed_wpm = float('nan')
+        if not math.isfinite(speed_wpm) or speed_wpm <= 60:
+            return Response(
+                {'error': 'A code-writing speed above 60 WPM is required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if (
+            not assignment.is_flagged_cheating
+            or speed_wpm > (assignment.cheating_flag_speed_wpm or 0)
+        ):
+            assignment.is_flagged_cheating = True
+            assignment.cheating_flag_reason = 'high_code_writing_speed'
+            assignment.cheating_flag_speed_wpm = speed_wpm
+            if assignment.cheating_flagged_at is None:
+                assignment.cheating_flagged_at = timezone.now()
+            assignment.save(update_fields=[
+                'is_flagged_cheating',
+                'cheating_flag_reason',
+                'cheating_flag_speed_wpm',
+                'cheating_flagged_at',
+                'updated_at',
+            ])
+
+        return Response({
+            'message': 'This attempt has been flagged for review.',
+            'assignment': AssessmentAssignmentSerializer(
+                assignment,
+                context={'request': request},
+            ).data,
+        })
 
     @action(
         detail=True,

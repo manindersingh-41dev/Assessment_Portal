@@ -73,6 +73,17 @@ class AssessmentAdmin(admin.ModelAdmin):
             assignment_count=Count('assignments', distinct=True)
         )
 
+    def save_model(self, request, obj, form, change):
+        was_published = (
+            Assessment.objects.filter(pk=obj.pk, is_published=True).exists()
+            if change else False
+        )
+        super().save_model(request, obj, form, change)
+        if obj.is_published and not was_published:
+            from .notifications import send_assessment_publication_notifications
+
+            send_assessment_publication_notifications(obj)
+
     def status_colored(self, obj):
         """Display status with color coding."""
         colors = {
@@ -166,6 +177,9 @@ class AssessmentAdmin(admin.ModelAdmin):
                     if assessment.published_at is None:
                         assessment.published_at = timezone.now()
                     assessment.save()
+                    from .notifications import send_assessment_publication_notifications
+
+                    send_assessment_publication_notifications(assessment)
                     count += 1
         self.message_user(request, f'{count} assessment(s) published.')
     publish_assessments.short_description = 'Publish selected assessments'
@@ -219,13 +233,14 @@ class AssessmentAssignmentAdmin(admin.ModelAdmin):
 
     list_display = (
         'assessment_title', 'student_name', 'status_colored',
-        'started_at', 'submitted_at', 'due_at', 'created_at'
+        'cheating_flag_badge', 'started_at', 'submitted_at', 'due_at', 'created_at'
     )
-    list_filter = ('status', 'created_at')
+    list_filter = ('status', 'is_flagged_cheating', 'created_at')
     search_fields = ('assessment__title', 'student__email', 'student__first_name')
     readonly_fields = (
         'id', 'assessment', 'student', 'created_at', 'started_at',
-        'submitted_at', 'assignment_timeline'
+        'submitted_at', 'is_flagged_cheating', 'cheating_flag_reason',
+        'cheating_flag_speed_wpm', 'cheating_flagged_at', 'assignment_timeline'
     )
     ordering = ('-created_at',)
 
@@ -239,8 +254,11 @@ class AssessmentAssignmentAdmin(admin.ModelAdmin):
                 'due_at', 'assignment_timeline'
             )
         }),
-        ('Metadata', {
-            'fields': (),
+        ('Integrity review', {
+            'fields': (
+                'is_flagged_cheating', 'cheating_flag_reason',
+                'cheating_flag_speed_wpm', 'cheating_flagged_at'
+            ),
         }),
     )
 
@@ -270,6 +288,14 @@ class AssessmentAssignmentAdmin(admin.ModelAdmin):
             obj.get_status_display()
         )
     status_colored.short_description = 'Status'
+
+    def cheating_flag_badge(self, obj):
+        if obj.is_flagged_cheating:
+            return format_html(
+                '<span style="color: #DC3545; font-weight: bold;">Flagged</span>'
+            )
+        return '—'
+    cheating_flag_badge.short_description = 'Integrity'
 
     def assignment_timeline(self, obj):
         """Display assignment timeline."""
