@@ -1,0 +1,11 @@
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/schemas/
+public/clang/
+public/vendor/monaco/
+resources/gcc/*
+!resources/gcc/README.md
+.env
+.env.*
+!.env.example

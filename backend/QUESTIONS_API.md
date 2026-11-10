@@ -63,6 +63,7 @@ Response (201 Created):
     "message": "Question created successfully (DRAFT status)",
     "question": {
         "id": "uuid",
+        "question_id": "uuid",
         "title": "Sum of Numbers",
         "description": "Given N numbers, find their sum.",
         "input_format": "...",
@@ -99,6 +100,9 @@ Validation:
 - Memory limit: 1-2048 MB
 - Test cases: At least one, with correct total marks
 - Sample test cases: At least one must be marked as sample
+- Duplicate questions with the same normalized title, description, input format, output format, and constraints are rejected. The error includes the existing question_id.
+
+`question_id` is the stable UUID identifier for the question and currently matches `id`. `id` remains in responses for compatibility.
 
 Status: Created in DRAFT status by default
 

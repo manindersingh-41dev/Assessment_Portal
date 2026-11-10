@@ -1,0 +1,50 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block content %}
+<div id="content-main" class="geeta-dashboard">
+  <section class="geeta-welcome">
+    <div>
+      <p class="geeta-eyebrow">PORTAL ADMINISTRATION</p>
+      <h1>Welcome back, {{ request.user.get_short_name|default:request.user.get_username }}</h1>
+      <p>Manage question banks, assessments, users, and evaluation records.</p>
+    </div>
+    <div class="geeta-welcome-mark" aria-hidden="true">GU</div>
+  </section>
+
+  {% if app_list %}
+    <div class="geeta-app-grid">
+      {% for app in app_list %}
+        <section class="geeta-app-card">
+          <header class="geeta-app-heading">
+            <div>
+              <p class="geeta-eyebrow">MANAGEMENT</p>
+              <h2>{{ app.name }}</h2>
+            </div>
+            <span class="geeta-app-count">{{ app.models|length }} section{{ app.models|length|pluralize }}</span>
+          </header>
+          <div class="geeta-model-list">
+            {% for model in app.models %}
+              <div class="geeta-model-row">
+                {% if model.admin_url %}
+                  <a class="geeta-model-link" href="{{ model.admin_url }}">{{ model.name }}</a>
+                {% else %}
+                  <span class="geeta-model-link geeta-model-disabled">{{ model.name }}</span>
+                {% endif %}
+                {% if model.add_url %}
+                  <a class="geeta-add-link" href="{{ model.add_url }}">Add</a>
+                {% endif %}
+              </div>
+            {% endfor %}
+          </div>
+        </section>
+      {% endfor %}
+    </div>
+  {% else %}
+    <section class="geeta-empty-state">
+      <h2>No management sections are available</h2>
+      <p>Your account does not currently have permission to manage portal records.</p>
+    </section>
+  {% endif %}
+</div>
+{% endblock %}

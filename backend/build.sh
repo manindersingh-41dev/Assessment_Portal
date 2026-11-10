@@ -9,3 +9,4 @@ if [[ -n "${DATABASE_URL_UNPOOLED:-}" ]]; then
 fi
 
 python manage.py migrate --noinput
+python manage.py collectstatic --noinput

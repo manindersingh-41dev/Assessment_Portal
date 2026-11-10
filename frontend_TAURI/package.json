@@ -1,0 +1,42 @@
+{
+  "name": "frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "predev": "node scripts/copy-monaco-assets.mjs && npm run copy:wasm-assets",
+    "dev": "vite",
+    "prebuild": "node scripts/copy-monaco-assets.mjs && npm run copy:wasm-assets",
+    "copy:wasm-assets": "clang-wasm-copy-assets public/clang",
+    "build": "vite build",
+    "lint": "oxlint",
+    "preview": "vite preview",
+    "desktop:dev": "cargo tauri dev",
+    "desktop:build": "cargo tauri build",
+    "desktop:build:windows": "cargo tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc"
+  },
+  "dependencies": {
+    "@monaco-editor/react": "^4.7.0",
+    "@bjorn3/browser_wasi_shim": "0.4.2",
+    "@live-codes/clang-wasm": "0.3.0",
+    "@wasm-idle/llvm-core": "1.0.0",
+    "axios": "^1.21.0",
+    "js-cookie": "^3.0.8",
+    "lucide-react": "^1.70.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-router-dom": "^7.18.5",
+    "zustand": "^5.0.16"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "autoprefixer": "^10.6.2",
+    "oxlint": "^1.90.0",
+    "postcss": "^8.5.32",
+    "tailwindcss": "^4.3.4",
+    "vite": "^8.3.6"
+  }
+}

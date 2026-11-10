@@ -7,11 +7,17 @@ member who created it. Status controls whether the question is active/draft/
 archived for use in assessments.
 """
 
+from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 
 from users.models.base import CreatedByModel, TimeStampedModel, UUIDModel
+from questions.validators import (
+    QUESTION_CONTENT_FIELDS,
+    find_duplicate_question,
+    question_content_fingerprint,
+)
 
 
 class Question(UUIDModel, TimeStampedModel, CreatedByModel):
@@ -126,6 +132,31 @@ class Question(UUIDModel, TimeStampedModel, CreatedByModel):
                 condition=models.Q(total_marks__gte=1),
             ),
         ]
+
+    @property
+    def question_id(self):
+        """Stable public question identifier, backed by the UUID primary key."""
+        return self.id
+
+    def clean(self):
+        super().clean()
+        values = {
+            field: getattr(self, field, "")
+            for field in QUESTION_CONTENT_FIELDS
+        }
+        if self.pk:
+            original = type(self).objects.filter(pk=self.pk).only(
+                "id", *QUESTION_CONTENT_FIELDS
+            ).first()
+            if original:
+                original_values = {field: getattr(original, field) for field in values}
+                if question_content_fingerprint(values) == question_content_fingerprint(original_values):
+                    return
+        duplicate = find_duplicate_question(values, exclude_id=self.pk)
+        if duplicate:
+            raise ValidationError({
+                "title": f"An identical question already exists (question_id: {duplicate.question_id})."
+            })
 
     def __str__(self):
         return self.title

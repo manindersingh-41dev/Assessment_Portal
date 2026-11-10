@@ -1,0 +1,121 @@
+:root {
+  --geeta-ink: #16213b;
+  --geeta-muted: #68758f;
+  --geeta-line: #e3e8f1;
+  --geeta-surface: #fff;
+  --geeta-page: #f4f6fb;
+  --geeta-blue: #3157c8;
+  --geeta-blue-dark: #2444a6;
+  --geeta-teal: #43c6ac;
+}
+
+body {
+  background: var(--geeta-page);
+  color: var(--geeta-ink);
+  font-family: Inter, "Segoe UI", Arial, sans-serif;
+}
+
+#header {
+  align-items: center;
+  background: linear-gradient(110deg, #101a35, #263e78);
+  color: #fff;
+  min-height: 74px;
+  padding: 12px 28px;
+}
+
+#branding { display: flex; align-items: center; }
+.geeta-brand, .geeta-brand a { color: #fff !important; text-decoration: none; }
+.geeta-brand a { display: flex; align-items: center; gap: 12px; }
+
+.geeta-brand-mark, .geeta-welcome-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(145deg, #56d5bc, #239b91);
+  border-radius: 13px;
+  color: #10233e;
+  font-size: 15px;
+  font-weight: 800;
+  height: 42px;
+  width: 42px;
+}
+
+.geeta-brand-copy { display: grid; gap: 2px; }
+.geeta-brand-copy strong { font-size: 15px; }
+.geeta-brand-copy small { color: #bdc8e1; font-size: 12px; }
+#user-tools { color: #d7deef; font-size: 12px; }
+#user-tools a:link, #user-tools a:visited { color: #fff; }
+
+#content {
+  box-sizing: border-box;
+  margin: 28px auto;
+  max-width: 1500px;
+  padding: 0 28px 36px;
+  width: 100%;
+}
+
+#content h1, #content h2, #content h3 { color: var(--geeta-ink); }
+.geeta-dashboard { margin: 0 auto; max-width: 1320px; }
+
+.geeta-welcome {
+  align-items: center;
+  background: linear-gradient(115deg, #fff, #f4f7ff);
+  border: 1px solid var(--geeta-line);
+  border-radius: 18px;
+  box-shadow: 0 12px 36px rgb(23 42 85 / 6%);
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 24px;
+  min-height: 170px;
+  padding: 28px 34px;
+}
+
+.geeta-welcome h1 { font-size: clamp(24px, 3vw, 34px); margin: 5px 0 8px; }
+.geeta-welcome p:not(.geeta-eyebrow) { color: var(--geeta-muted); font-size: 14px; margin: 0; }
+.geeta-eyebrow { color: var(--geeta-blue); font-size: 10px; font-weight: 800; letter-spacing: .15em; margin: 0; }
+.geeta-welcome-mark { border-radius: 24px; font-size: 29px; height: 94px; margin-right: 12px; transform: rotate(7deg); width: 94px; }
+
+.geeta-app-grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); }
+.geeta-app-card, .geeta-empty-state {
+  background: var(--geeta-surface);
+  border: 1px solid var(--geeta-line);
+  border-radius: 15px;
+  box-shadow: 0 8px 24px rgb(23 42 85 / 4%);
+  overflow: hidden;
+}
+
+.geeta-app-heading { align-items: center; border-bottom: 1px solid var(--geeta-line); display: flex; justify-content: space-between; padding: 20px 22px 17px; }
+.geeta-app-heading h2 { font-size: 17px; margin: 5px 0 0; }
+.geeta-app-count { background: #edf2ff; border-radius: 20px; color: var(--geeta-blue-dark); font-size: 11px; font-weight: 700; padding: 6px 10px; }
+.geeta-model-list { padding: 5px 22px 10px; }
+.geeta-model-row { align-items: center; border-bottom: 1px solid #edf0f6; display: flex; justify-content: space-between; min-height: 53px; }
+.geeta-model-row:last-child { border-bottom: 0; }
+.geeta-model-link { color: var(--geeta-ink) !important; font-size: 13px; font-weight: 650; text-decoration: none; }
+.geeta-model-link:hover { color: var(--geeta-blue) !important; }
+.geeta-model-disabled { color: #9aa4b6 !important; }
+.geeta-add-link { border: 1px solid #d9e2fb; border-radius: 7px; color: var(--geeta-blue) !important; font-size: 11px; font-weight: 750; padding: 6px 10px; text-decoration: none; }
+.geeta-add-link:hover { background: #eef2ff; }
+.geeta-empty-state { padding: 32px; }
+.geeta-empty-state p { color: var(--geeta-muted); }
+
+.module, .inline-group, .submit-row, .aligned .form-row, .results { border-color: var(--geeta-line); border-radius: 10px; }
+.module h2, .module caption, .inline-group h2 { background: #eef2fb; color: var(--geeta-ink); }
+input[type="submit"], .submit-row input, a.button, .button, input.default {
+  background: var(--geeta-blue);
+  border: 0;
+  border-radius: 7px;
+  color: #fff !important;
+  font-weight: 700;
+  padding: 9px 14px;
+}
+input[type="submit"]:hover, .submit-row input:hover, a.button:hover, .button:hover, input.default:hover { background: var(--geeta-blue-dark); }
+.object-tools a:link, .object-tools a:visited { background: var(--geeta-blue); border-radius: 7px; }
+.messagelist li { border-radius: 8px; box-shadow: 0 5px 15px rgb(23 42 85 / 5%); }
+
+@media (max-width: 767px) {
+  #header { align-items: flex-start; flex-direction: column; gap: 12px; padding: 14px 18px; }
+  #content { margin-top: 18px; padding: 0 14px 24px; }
+  .geeta-welcome { min-height: 145px; padding: 22px; }
+  .geeta-welcome-mark { display: none; }
+  .geeta-app-grid { grid-template-columns: 1fr; }
+}

@@ -22,6 +22,10 @@ from rest_framework_simplejwt.views import (
 )
 from users.views import StudentDirectoryView
 
+admin.site.site_header = "Geeta University Administration"
+admin.site.site_title = "Geeta Assessment Portal"
+admin.site.index_title = "Portal management"
+
 urlpatterns = [
     path("admin/", admin.site.urls),
 

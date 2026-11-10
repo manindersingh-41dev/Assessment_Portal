@@ -5,6 +5,11 @@ from rest_framework import serializers
 
 from questions.models import Question, TestCase
 from questions.services import has_test_case_results, question_has_submissions
+from questions.validators import (
+    QUESTION_CONTENT_FIELDS,
+    find_duplicate_question,
+    question_content_fingerprint,
+)
 
 
 class TestCaseSerializer(serializers.ModelSerializer):
@@ -177,6 +182,7 @@ class TestCaseUpdateSerializer(serializers.ModelSerializer):
 class QuestionSerializer(serializers.ModelSerializer):
     """Read representation of a question and its accessible test cases."""
 
+    question_id = serializers.UUIDField(source="id", read_only=True)
     created_by_email = serializers.EmailField(source="created_by.email", read_only=True)
     test_cases = serializers.SerializerMethodField()
     has_submissions = serializers.SerializerMethodField()
@@ -185,6 +191,7 @@ class QuestionSerializer(serializers.ModelSerializer):
         model = Question
         fields = [
             "id",
+            "question_id",
             "title",
             "description",
             "input_format",
@@ -231,6 +238,7 @@ class QuestionCreateUpdateSerializer(serializers.ModelSerializer):
         model = Question
         fields = [
             "id",
+            "question_id",
             "title",
             "description",
             "input_format",
@@ -248,12 +256,12 @@ class QuestionCreateUpdateSerializer(serializers.ModelSerializer):
             "memory_limit_mb",
             "test_cases",
         ]
-        read_only_fields = ["id"]
+        read_only_fields = ["id", "question_id"]
 
     def validate_title(self, value):
         if not value.strip():
             raise serializers.ValidationError("Title cannot be empty.")
-        return value
+        return value.strip()
 
     def validate_total_marks(self, value):
         if value < 1 or value > 100:
@@ -271,6 +279,25 @@ class QuestionCreateUpdateSerializer(serializers.ModelSerializer):
         return value
 
     def validate(self, attrs):
+        candidate = {
+            field: attrs.get(field, getattr(self.instance, field, ""))
+            for field in QUESTION_CONTENT_FIELDS
+        }
+        content_changed = not self.instance or (
+            question_content_fingerprint(candidate)
+            != question_content_fingerprint({
+                field: getattr(self.instance, field) for field in QUESTION_CONTENT_FIELDS
+            })
+        )
+        duplicate = find_duplicate_question(
+            candidate,
+            exclude_id=self.instance.pk if self.instance else None,
+        ) if content_changed else None
+        if duplicate:
+            raise serializers.ValidationError({
+                "title": f"This question already exists (question_id: {duplicate.question_id})."
+            })
+
         test_cases = attrs.get("test_cases")
         total_marks = attrs.get(
             "total_marks",
@@ -382,9 +409,17 @@ class QuestionBulkCreateSerializer(serializers.Serializer):
         if len(questions) > 100:
             raise serializers.ValidationError("A bulk import can contain at most 100 questions.")
         errors = [{} for _ in questions]
+        seen_fingerprints = {}
         for index, question in enumerate(questions):
             if not question.get("test_cases"):
                 errors[index]["test_cases"] = "At least one test case is required for every imported question."
+            fingerprint = question_content_fingerprint(question)
+            if fingerprint in seen_fingerprints:
+                errors[index]["title"] = (
+                    f"Duplicate of question {seen_fingerprints[fingerprint] + 1} in this import."
+                )
+            else:
+                seen_fingerprints[fingerprint] = index
         if any(errors):
             raise serializers.ValidationError(errors)
         return questions

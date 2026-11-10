@@ -6,7 +6,6 @@ Provides admin panel for managing questions and test cases.
 
 from django.contrib import admin
 from django.utils.html import format_html
-from django.urls import reverse
 from django.db.models import Count
 from .models import Question, TestCase
 
@@ -16,20 +15,20 @@ class QuestionAdmin(admin.ModelAdmin):
     """Admin interface for Question model."""
 
     list_display = (
-        'title', 'difficulty_colored', 'status_colored', 'topic',
+        'question_id', 'title', 'difficulty_colored', 'status_colored', 'topic',
         'total_marks', 'test_case_count', 'created_by_name', 'created_at'
     )
     list_filter = ('status', 'difficulty', 'topic', 'created_at', 'language')
-    search_fields = ('title', 'description', 'topic')
+    search_fields = ('=id', 'title', 'description', 'topic')
     readonly_fields = (
-        'id', 'created_by', 'created_at', 'updated_at', 'test_case_count_display',
+        'question_id', 'created_by', 'created_at', 'updated_at', 'test_case_count_display',
         'test_case_marks_validation'
     )
     ordering = ('-created_at',)
 
     fieldsets = (
         ('Question Information', {
-            'fields': ('id', 'title', 'topic', 'difficulty', 'status')
+            'fields': ('question_id', 'title', 'topic', 'difficulty', 'status')
         }),
         ('Problem Statement', {
             'fields': (

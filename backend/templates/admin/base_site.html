@@ -1,0 +1,21 @@
+{% extends "admin/base.html" %}
+{% load static %}
+
+{% block title %}{{ title }} | Geeta Assessment Portal{% endblock %}
+
+{% block branding %}
+<div id="site-name" class="geeta-brand">
+  <a href="{% url 'admin:index' %}">
+    <span class="geeta-brand-mark">GU</span>
+    <span class="geeta-brand-copy">
+      <strong>Geeta University</strong>
+      <small>Assessment Portal</small>
+    </span>
+  </a>
+</div>
+{% endblock %}
+
+{% block extrastyle %}
+  {{ block.super }}
+  <link rel="stylesheet" href="{% static 'admin/css/portal-theme.css' %}">
+{% endblock %}
