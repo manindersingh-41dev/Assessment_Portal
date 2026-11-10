@@ -26,8 +26,10 @@ import { createWasmRunner, RUNNER_TYPE, WASM_COMPILER_VERSION, WASM_RUNNER_VERSI
 const endpoints = config.api.endpoints;
 const DEFAULT_CODE = '#include <stdio.h>\n\nint main(void) {\n    // Write your solution here\n    return 0;\n}\n';
 const FINAL_STATES = new Set(['completed', 'failed']);
-const CODE_SPEED_WINDOW_MS = 10_000;
-const CODE_SPEED_LIMIT_WPM = 60;
+const CODE_SPEED_WINDOW_MS = 1_000;
+const CODE_SPEED_LIMIT_WPM = 85;
+const CODE_SPEED_SUSTAIN_MS = 3_000;
+const CODE_SPEED_GAP_TOLERANCE_MS = 750;
 const CHARACTERS_PER_WORD = 5;
 
 const countInsertedCharacters = (previousCode, nextCode) => {
@@ -255,6 +257,8 @@ const AssessmentAttemptPage = () => {
   const workspacePanelsRef = useRef(null);
   const codeInsertionSamplesRef = useRef([]);
   const cheatingFlagRequestRef = useRef(false);
+  const highSpeedStartedAtRef = useRef(null);
+  const lastHighSpeedObservationAtRef = useRef(null);
 
   useEffect(() => {
     runnerGenerationRef.current += 1;
@@ -575,6 +579,8 @@ const AssessmentAttemptPage = () => {
       setCurrentQuestionIndex(0);
       codeInsertionSamplesRef.current = [];
       cheatingFlagRequestRef.current = false;
+      highSpeedStartedAtRef.current = null;
+      lastHighSpeedObservationAtRef.current = null;
       autoSubmitTriggeredRef.current = false;
       submissionIdsRef.current = {};
       submissionStatusesRef.current = {};
@@ -747,7 +753,14 @@ const AssessmentAttemptPage = () => {
   }, [addNotification, id, reloadKey, resumePendingClientEvaluations, updateSubmissionStatusError]);
 
   const performFinalSubmit = useCallback(async (automatic = false) => {
-    if (!assignment || !questions.length || finalized || submitLockRef.current || questionSubmitLocksRef.current.size) return;
+    if (
+      !assignment
+      || !questions.length
+      || finalized
+      || (!automatic && assignment.is_flagged_cheating)
+      || submitLockRef.current
+      || questionSubmitLocksRef.current.size
+    ) return;
     if (!automatic && (!allQuestionsSubmitted || !allQuestionSubmissionsSettled)) return;
     submitLockRef.current = true;
     setSubmitting(true);
@@ -974,7 +987,50 @@ const AssessmentAttemptPage = () => {
     };
   }, [addNotification, assessment?.is_timed, assignment?.status, finalized, saveDraftNow]);
 
-  const flagHighCodeSpeed = (speedWpm) => {
+  useEffect(() => {
+    if (
+      !assignment?.id
+      || !assignment.is_flagged_cheating
+      || cheatingFlagSyncStatus !== 'saved'
+      || finalized
+    ) return undefined;
+
+    const controller = new AbortController();
+    let requestInFlight = false;
+    const refreshCheatingFlag = async () => {
+      if (requestInFlight || controller.signal.aborted) return;
+      requestInFlight = true;
+      try {
+        const response = await api.get(
+          endpoints.assessments.assignmentDetail(assignment.id),
+          { signal: controller.signal },
+        );
+        if (controller.signal.aborted) return;
+        const latestAssignment = response.data?.assignment || response.data;
+        setAssignment(latestAssignment);
+        if (!latestAssignment.is_flagged_cheating) {
+          cheatingFlagRequestRef.current = false;
+          codeInsertionSamplesRef.current = [];
+          highSpeedStartedAtRef.current = null;
+          lastHighSpeedObservationAtRef.current = null;
+          setCheatingFlagSyncStatus('');
+          addNotification('Faculty removed the coding lock. You may continue.', 'success');
+        }
+      } catch {
+        // Keep the lock in place while retrying the assignment status check.
+      } finally {
+        requestInFlight = false;
+      }
+    };
+
+    const interval = window.setInterval(refreshCheatingFlag, 3_000);
+    return () => {
+      controller.abort();
+      window.clearInterval(interval);
+    };
+  }, [addNotification, assignment?.id, assignment?.is_flagged_cheating, cheatingFlagSyncStatus, finalized]);
+
+  const flagHighCodeSpeed = (speedWpm, sustainedMs) => {
     if (
       !assignment?.id
       || assignment.status !== 'started'
@@ -988,12 +1044,14 @@ const AssessmentAttemptPage = () => {
       is_flagged_cheating: true,
       cheating_flag_reason: 'high_code_writing_speed',
       cheating_flag_speed_wpm: speedWpm,
+      cheating_flag_sustained_ms: sustainedMs,
       cheating_flagged_at: new Date().toISOString(),
     }));
 
     api.post(endpoints.assessments.flagCheating(assignment.id), {
       reason: 'high_code_writing_speed',
       speed_wpm: speedWpm,
+      sustained_ms: sustainedMs,
     }).then((response) => {
       const savedAssignment = response.data?.assignment;
       if (savedAssignment) setAssignment((current) => ({ ...current, ...savedAssignment }));
@@ -1019,10 +1077,24 @@ const AssessmentAttemptPage = () => {
         samples.push({ at: now, characters: insertedCharacters });
         codeInsertionSamplesRef.current = samples;
         const charactersInWindow = samples.reduce((total, sample) => total + sample.characters, 0);
-        const elapsedMs = Math.max(1_000, now - samples[0].at);
         const speedWpm = (charactersInWindow * 60_000)
-          / (CHARACTERS_PER_WORD * elapsedMs);
-        if (speedWpm > CODE_SPEED_LIMIT_WPM) flagHighCodeSpeed(speedWpm);
+          / (CHARACTERS_PER_WORD * CODE_SPEED_WINDOW_MS);
+        if (speedWpm > CODE_SPEED_LIMIT_WPM) {
+          const lastObservation = lastHighSpeedObservationAtRef.current;
+          if (
+            highSpeedStartedAtRef.current === null
+            || (lastObservation !== null && now - lastObservation > CODE_SPEED_GAP_TOLERANCE_MS)
+          ) {
+            highSpeedStartedAtRef.current = now;
+          }
+          lastHighSpeedObservationAtRef.current = now;
+          if (now - highSpeedStartedAtRef.current >= CODE_SPEED_SUSTAIN_MS) {
+            flagHighCodeSpeed(speedWpm, now - highSpeedStartedAtRef.current);
+          }
+        } else {
+          highSpeedStartedAtRef.current = null;
+          lastHighSpeedObservationAtRef.current = null;
+        }
       }
     }
 
@@ -1330,7 +1402,7 @@ const AssessmentAttemptPage = () => {
             <ShieldAlert size={32} className="mx-auto text-rose-400" />
             <h2 id="cheating-flag-title" className="text-xl font-bold text-white">Coding screen locked</h2>
             <p className="text-sm leading-6 text-slate-300">
-              Code-writing speed exceeded 60 WPM. This attempt has been flagged for suspected cheating and is locked for faculty review.
+              Code-writing speed stayed above 85 WPM for at least three seconds. This attempt has been flagged for suspected cheating and is locked for faculty review.
             </p>
             <p className="text-sm font-semibold text-rose-200">
               Recorded speed: {Math.round(assignment.cheating_flag_speed_wpm || 0)} WPM
@@ -1373,7 +1445,7 @@ const AssessmentAttemptPage = () => {
         <div className="flex shrink-0 items-center gap-2 border-b border-rose-900/70 bg-rose-950/70 px-4 py-3 text-sm text-rose-100" role="alert">
           <ShieldAlert size={17} />
           <span>
-            Cheating review flag: code-writing speed reached {Math.round(assignment.cheating_flag_speed_wpm || 0)} WPM (limit: 60 WPM).
+            Cheating review flag: code-writing speed reached {Math.round(assignment.cheating_flag_speed_wpm || 0)} WPM (limit: 85 WPM).
             {' '}{cheatingFlagSyncStatus === 'failed' ? 'The flag could not be saved to the server.' : cheatingFlagSyncStatus === 'saving' ? 'Saving the flag…' : 'This attempt is flagged for faculty review.'}
           </span>
         </div>
@@ -1601,7 +1673,7 @@ const AssessmentAttemptPage = () => {
                   : submissionIds[currentQuestion.id] ? 'Submit question again' : 'Submit question'}
               </Button>
               {allQuestionsSubmitted && (
-                <Button size="sm" loading={submitting} disabled={finalized || submitting || submittingQuestionIds.size > 0 || !allQuestionSubmissionsSettled}
+                <Button size="sm" loading={submitting} disabled={assignment.is_flagged_cheating || finalized || submitting || submittingQuestionIds.size > 0 || !allQuestionSubmissionsSettled}
                   onClick={() => setShowSubmitConfirm(true)}>
                   <CheckCircle2 size={14} />Submit assessment
                 </Button>
@@ -1618,7 +1690,7 @@ const AssessmentAttemptPage = () => {
         footer={(
           <>
             <Button variant="secondary" onClick={() => setShowSubmitConfirm(false)}>Keep working</Button>
-            <Button variant="danger" loading={submitting} disabled={!allQuestionSubmissionsSettled} onClick={() => performFinalSubmit(false)}>Submit assessment</Button>
+            <Button variant="danger" loading={submitting} disabled={assignment.is_flagged_cheating || !allQuestionSubmissionsSettled} onClick={() => performFinalSubmit(false)}>Submit assessment</Button>
           </>
         )}
       >

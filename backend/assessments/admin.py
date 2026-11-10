@@ -240,7 +240,9 @@ class AssessmentAssignmentAdmin(admin.ModelAdmin):
     readonly_fields = (
         'id', 'assessment', 'student', 'created_at', 'started_at',
         'submitted_at', 'is_flagged_cheating', 'cheating_flag_reason',
-        'cheating_flag_speed_wpm', 'cheating_flagged_at', 'assignment_timeline'
+        'cheating_flag_speed_wpm', 'cheating_flag_sustained_ms', 'cheating_flagged_at',
+        'cheating_flag_cleared_at', 'cheating_flag_cleared_by',
+        'assignment_timeline'
     )
     ordering = ('-created_at',)
 
@@ -257,7 +259,8 @@ class AssessmentAssignmentAdmin(admin.ModelAdmin):
         ('Integrity review', {
             'fields': (
                 'is_flagged_cheating', 'cheating_flag_reason',
-                'cheating_flag_speed_wpm', 'cheating_flagged_at'
+                'cheating_flag_speed_wpm', 'cheating_flag_sustained_ms', 'cheating_flagged_at',
+                'cheating_flag_cleared_at', 'cheating_flag_cleared_by'
             ),
         }),
     )

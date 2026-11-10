@@ -29,6 +29,7 @@ const AssessmentDetailsPage = () => {
   const [loading, setLoading] = useState(true);
   const [publishing, setPublishing] = useState(false);
   const [retryingNotificationId, setRetryingNotificationId] = useState(null);
+  const [unlockingAssignmentId, setUnlockingAssignmentId] = useState(null);
   const [loadError, setLoadError] = useState('');
   const { id } = useParams();
   const navigate = useNavigate();
@@ -109,6 +110,24 @@ const AssessmentDetailsPage = () => {
       addNotification(error.response?.data?.error || 'Could not retry this email.', 'error');
     } finally {
       setRetryingNotificationId(null);
+    }
+  };
+
+  const removeCodingLock = async (assignmentId) => {
+    setUnlockingAssignmentId(assignmentId);
+    try {
+      const response = await api.post(endpoints.assessments.clearCheatingFlag(assignmentId));
+      const updatedAssignment = response.data?.assignment;
+      if (updatedAssignment) {
+        setAssignments((current) => current.map((item) => (
+          item.id === assignmentId ? { ...item, ...updatedAssignment } : item
+        )));
+      }
+      addNotification('Student coding lock removed.', 'success');
+    } catch (error) {
+      addNotification(error.response?.data?.error || 'Could not remove the coding lock.', 'error');
+    } finally {
+      setUnlockingAssignmentId(null);
     }
   };
 
@@ -233,6 +252,18 @@ const AssessmentDetailsPage = () => {
                     <div className="mt-2 rounded-lg border border-rose-900/40 bg-rose-50 p-2 text-xs text-rose-800 dark:bg-rose-950/30 dark:text-rose-200">
                       <p className="font-semibold"><ShieldAlert size={14} className="mr-1 inline" />Cheating review flag</p>
                       <p className="mt-1">Code-writing speed: {Math.round(assignment.cheating_flag_speed_wpm || 0)} WPM</p>
+                      {assignment.cheating_flag_sustained_ms > 0 && (
+                        <p className="mt-1">Above limit for: {(assignment.cheating_flag_sustained_ms / 1000).toFixed(1)} seconds</p>
+                      )}
+                      <Button
+                        className="mt-2"
+                        size="sm"
+                        variant="secondary"
+                        loading={unlockingAssignmentId === assignment.id}
+                        onClick={() => removeCodingLock(assignment.id)}
+                      >
+                        Remove coding lock
+                      </Button>
                     </div>
                   )}
                   {notifications.length > 0 && (

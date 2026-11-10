@@ -75,7 +75,16 @@ class AssessmentAssignment(UUIDModel, TimeStampedModel, CreatedByModel):
     )
     cheating_flag_reason = models.CharField(max_length=64, blank=True)
     cheating_flag_speed_wpm = models.FloatField(null=True, blank=True)
+    cheating_flag_sustained_ms = models.PositiveIntegerField(null=True, blank=True)
     cheating_flagged_at = models.DateTimeField(null=True, blank=True)
+    cheating_flag_cleared_at = models.DateTimeField(null=True, blank=True)
+    cheating_flag_cleared_by = models.ForeignKey(
+        "users.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="assessment_cheating_flags_cleared",
+    )
 
     class Meta:
         verbose_name = _("assessment assignment")

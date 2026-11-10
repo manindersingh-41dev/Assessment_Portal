@@ -402,9 +402,18 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
             speed_wpm = float(request.data.get('speed_wpm'))
         except (TypeError, ValueError):
             speed_wpm = float('nan')
-        if not math.isfinite(speed_wpm) or speed_wpm <= 60:
+        try:
+            sustained_ms = int(request.data.get('sustained_ms'))
+        except (TypeError, ValueError):
+            sustained_ms = 0
+        if not math.isfinite(speed_wpm) or speed_wpm <= 85:
             return Response(
-                {'error': 'A code-writing speed above 60 WPM is required.'},
+                {'error': 'A code-writing speed above 85 WPM is required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if sustained_ms < 3_000:
+            return Response(
+                {'error': 'The speed must remain above the limit for at least three seconds.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -412,21 +421,63 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
             not assignment.is_flagged_cheating
             or speed_wpm > (assignment.cheating_flag_speed_wpm or 0)
         ):
+            newly_flagged = not assignment.is_flagged_cheating
             assignment.is_flagged_cheating = True
             assignment.cheating_flag_reason = 'high_code_writing_speed'
             assignment.cheating_flag_speed_wpm = speed_wpm
-            if assignment.cheating_flagged_at is None:
+            assignment.cheating_flag_sustained_ms = sustained_ms
+            if newly_flagged:
                 assignment.cheating_flagged_at = timezone.now()
+                assignment.cheating_flag_cleared_at = None
+                assignment.cheating_flag_cleared_by = None
             assignment.save(update_fields=[
                 'is_flagged_cheating',
                 'cheating_flag_reason',
                 'cheating_flag_speed_wpm',
+                'cheating_flag_sustained_ms',
                 'cheating_flagged_at',
+                'cheating_flag_cleared_at',
+                'cheating_flag_cleared_by',
                 'updated_at',
             ])
 
         return Response({
             'message': 'This attempt has been flagged for review.',
+            'assignment': AssessmentAssignmentSerializer(
+                assignment,
+                context={'request': request},
+            ).data,
+        })
+
+    @action(detail=True, methods=['post'], url_path='clear-cheating-flag')
+    def clear_cheating_flag(self, request, pk=None):
+        """Let the owning faculty member remove an accidental coding lock."""
+        if request.user.role != 'faculty' or not request.user.is_faculty_approved:
+            return Response(
+                {'error': 'Only approved faculty can remove a cheating lock.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        assignment = self.get_object()
+        if assignment.assessment.created_by_id != request.user.id:
+            return Response(
+                {'error': 'You can only remove locks on your assessments.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if assignment.is_flagged_cheating:
+            assignment.is_flagged_cheating = False
+            assignment.cheating_flag_cleared_at = timezone.now()
+            assignment.cheating_flag_cleared_by = request.user
+            assignment.save(update_fields=[
+                'is_flagged_cheating',
+                'cheating_flag_cleared_at',
+                'cheating_flag_cleared_by',
+                'updated_at',
+            ])
+
+        return Response({
+            'message': 'The coding lock has been removed.',
             'assignment': AssessmentAssignmentSerializer(
                 assignment,
                 context={'request': request},
