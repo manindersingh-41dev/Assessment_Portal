@@ -15,9 +15,6 @@ import {
 
 const assetBaseUrl = () => new URL(`${import.meta.env.BASE_URL}clang/`, window.location.origin).href;
 
-const compilerWorkerUrl = new URL('./compiler.worker.js', import.meta.url);
-const testcaseWorkerUrl = new URL('./testcase.worker.js', import.meta.url);
-
 export class WasmRunner {
   constructor({ compileTimeoutMs = DEFAULT_COMPILE_TIMEOUT_MS } = {}) {
     this.compileTimeoutMs = compileTimeoutMs;
@@ -131,7 +128,10 @@ export class WasmRunner {
   #ensureCompilerWorker() {
     if (this.compilerWorker) return this.compilerWorker;
 
-    const worker = new Worker(compilerWorkerUrl, { type: 'module', name: 'assessment-wasm-compiler' });
+    const worker = new Worker(new URL('./compiler.worker.js', import.meta.url), {
+      type: 'module',
+      name: 'assessment-wasm-compiler',
+    });
     this.compilerWorker = worker;
     this.activeWorkers.add(worker);
 
@@ -182,7 +182,10 @@ export class WasmRunner {
   }
 
   #executeCase(wasmBytes, testCase, remainingOutputBytes) {
-    const worker = new Worker(testcaseWorkerUrl, { type: 'module', name: `assessment-wasm-case-${testCase.id}` });
+    const worker = new Worker(new URL('./testcase.worker.js', import.meta.url), {
+      type: 'module',
+      name: `assessment-wasm-case-${testCase.id}`,
+    });
     this.activeWorkers.add(worker);
 
     return new Promise((resolve, reject) => {
