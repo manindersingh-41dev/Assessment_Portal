@@ -21,10 +21,11 @@ The browser execution implementation and frontend integration are complete. Appr
 - Production Vite build: passed after copying the Monaco and WASM runtime assets.
 - Oxlint: no errors. Four warnings remain in pre-existing faculty/dashboard files about synchronous state updates in effects.
 - The generated production build is about 55 MB, including about 28 MB of compressed compiler/runtime assets. Generated `dist` and `public/clang` files are ignored; the prebuild scripts recreate them.
+- Compiler/runtime files are copied to a content-versioned `/clang/runtime-<hash>/` directory. The Cloudflare Pages `_headers` file configures a one-year immutable browser cache for these URLs, so repeat visits reuse the same toolchain and toolchain updates receive new URLs.
 
 ## Remaining before go-live
 
-1. Choose the deployment host and configure it to serve `/clang/` with caching and revalidation appropriate for these stable asset paths. Serve the site over HTTPS.
+1. Deploy the frontend to Cloudflare Pages with `npm run build`, then confirm `/clang/runtime-<hash>/` files return `Cache-Control: public, max-age=31536000, immutable`. Serve the site over HTTPS.
 2. Configure `VITE_API_URL`, backend CORS/allowed origins if frontend and API use different origins, and production API authentication.
 3. Apply backend migrations `0006` and `0007` in the target database before enabling the client-evaluation endpoints.
 4. Run an authenticated end-to-end assessment with the deployed frontend and backend. Check visible/hidden result privacy, latest-submission scoring, network retry/resume, timer expiry and assignment scorecards.

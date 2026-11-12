@@ -13,7 +13,10 @@ import {
   validateSourceCode,
 } from '../runnerContract';
 
-const assetBaseUrl = () => new URL(`${import.meta.env.BASE_URL}clang/`, window.location.origin).href;
+const assetBaseUrl = () => new URL(
+  `${import.meta.env.BASE_URL}clang/${import.meta.env.VITE_WASM_RUNTIME_ASSET_VERSION}/`,
+  window.location.origin,
+).href;
 
 export class WasmRunner {
   constructor({ compileTimeoutMs = DEFAULT_COMPILE_TIMEOUT_MS } = {}) {

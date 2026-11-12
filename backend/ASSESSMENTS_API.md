@@ -397,7 +397,7 @@ Permission: Own assignment (student)
 ### Submit Assignment
 POST /api/assessments/assignments/{id}/submit/
 
-Student submits completed assignment.
+Student finalizes a started assignment at any point. Questions without a saved submission count as unanswered; saved client evaluations may finish after finalization and update the score.
 
 Response (200 OK):
 {
@@ -414,6 +414,7 @@ Response (200 OK):
 Validation:
 - Student can only submit own assignment
 - Assignment must be in STARTED status
+- Questions do not need to have submissions before the assignment can be finalized
 
 Permission: Own assignment (student)
 

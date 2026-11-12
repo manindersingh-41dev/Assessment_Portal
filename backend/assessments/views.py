@@ -633,44 +633,6 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            required_questions = set(
-                assignment.assessment.assessment_questions.values_list('id', flat=True)
-            )
-            submitted_questions = set(
-                CodeSubmission.objects.filter(assignment=assignment)
-                .values_list('question_id', flat=True)
-                .distinct()
-            )
-            missing_questions = required_questions - submitted_questions
-            if missing_questions:
-                return Response(
-                    {
-                        'error': 'Submit each question before finishing the assessment.',
-                        'missing_questions': len(missing_questions),
-                    },
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-            latest_submissions = SubmissionService.latest_submissions_by_question(
-                assignment,
-                required_questions,
-            )
-            pending_submissions = any(
-                submission.status in {
-                    CodeSubmission.Status.PENDING,
-                    CodeSubmission.Status.COMPILING,
-                    CodeSubmission.Status.COMPILED,
-                    CodeSubmission.Status.EXECUTING,
-                }
-                for submission in latest_submissions.values()
-            )
-            automatic_submit = request.data.get('automatic', False) is True
-            if pending_submissions and not automatic_submit:
-                return Response(
-                    {'error': 'Wait for all question evaluations to finish before submitting the assessment.'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
             assignment.mark_submitted()
             SubmissionService.evaluate_assignment_submissions(assignment)
 

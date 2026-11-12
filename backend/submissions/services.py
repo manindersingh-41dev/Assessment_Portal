@@ -12,6 +12,7 @@ from django.utils import timezone
 
 from .models import CodeSubmission, TestCaseVerdict, ExecutionLog
 from assessments.models import AssessmentAssignment, AssessmentResult
+from questions.models import TestCase
 
 logger = logging.getLogger(__name__)
 
@@ -291,15 +292,6 @@ class SubmissionService:
             question_ids,
         )
 
-        missing_question_ids = set(question_ids) - set(latest_by_question)
-        if missing_question_ids:
-            logger.warning(
-                "Cannot evaluate assignment %s; %s questions have no submission",
-                assignment.id,
-                len(missing_question_ids),
-            )
-            return
-
         pending_latest = [
             submission
             for submission in latest_by_question.values()
@@ -316,14 +308,20 @@ class SubmissionService:
         latest_submissions = list(latest_by_question.values())
         marks_obtained = sum(submission.marks_obtained or 0 for submission in latest_submissions)
         passed_cases = sum(submission.passed_test_cases for submission in latest_submissions)
-        total_cases = sum(submission.total_test_cases for submission in latest_submissions)
+        total_cases = TestCase.objects.filter(
+            question__assessment_questions__assessment_id=assignment.assessment_id,
+        ).count()
         latest_completion = max(
-            (submission.execution_completed_at or submission.created_at)
-            for submission in latest_submissions
+            (
+                submission.execution_completed_at or submission.created_at
+                for submission in latest_submissions
+            ),
+            default=assignment.submitted_at or timezone.now(),
         )
+        all_questions_submitted = set(latest_by_question) >= set(question_ids)
         # The active V2 Assessment model has no configurable pass-mark field.
-        # Treat an assessment as passed only when every submitted test case passed.
-        passed = total_cases > 0 and passed_cases == total_cases
+        # An unanswered question earns zero and prevents a pass.
+        passed = all_questions_submitted and total_cases > 0 and passed_cases == total_cases
 
         # A pending or failed latest submission must never fall back to an
         # older, higher-scoring submission for the same question.

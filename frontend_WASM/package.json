@@ -7,7 +7,7 @@
     "predev": "node scripts/copy-monaco-assets.mjs && npm run copy:wasm-assets",
     "dev": "vite",
     "prebuild": "node scripts/copy-monaco-assets.mjs && npm run copy:wasm-assets",
-    "copy:wasm-assets": "clang-wasm-copy-assets public/clang",
+    "copy:wasm-assets": "clang-wasm-copy-assets .wasm-assets && node scripts/version-wasm-assets.mjs",
     "build": "vite build",
     "lint": "oxlint",
     "preview": "vite preview"

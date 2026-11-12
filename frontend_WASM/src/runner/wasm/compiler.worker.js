@@ -38,7 +38,10 @@ const getRuntime = (request) => {
     globalThis.SharedArrayBuffer ??= class SharedArrayBufferStub {};
 
     runtimePromise = (async () => {
-      const manifest = await loadRuntimeManifest(resolveRuntimeManifestUrl(request.assetBaseUrl));
+      const manifest = await loadRuntimeManifest(
+        resolveRuntimeManifestUrl(request.assetBaseUrl),
+        (url, options = {}) => fetch(url, { ...options, cache: 'force-cache' }),
+      );
       const runtime = new BrowserClangRuntime({
         runtimeBaseUrl: request.assetBaseUrl,
         manifest,

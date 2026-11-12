@@ -135,7 +135,7 @@ Validation and persistence rules:
 - Preserve one result row per case. The current `TestCaseVerdict` stores order and visibility rather than a test-case foreign key; implementation validates UUIDs against the saved server-side snapshot, then persists the corresponding order and visibility.
 - Use a database transaction so all verdict rows are either stored or none are.
 - Result reporting is idempotent. Repeating the same result payload for a completed submission returns its existing result; sending different results for an already-completed submission returns `409 Conflict`.
-- The status API returns the same result shape after completion. If the assignment was automatically submitted while an evaluation was pending, completion recalculates the assignment when all latest submissions have results.
+- The status API returns the same result shape after completion. If the assignment was submitted while an evaluation was pending, completion recalculates the assignment when all latest submissions have results.
 - A newer submission is ordered when its creation request is accepted, not when local execution finishes. A retry of an older `client_submission_id` must not become the latest submission.
 
 ## 6. Response and result privacy

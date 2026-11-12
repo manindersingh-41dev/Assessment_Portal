@@ -247,6 +247,7 @@ const AssessmentAttemptPage = () => {
   const draftSaveTimersRef = useRef(new Map());
   const draftSaveQueuesRef = useRef(new Map());
   const questionSubmitLocksRef = useRef(new Set());
+  const questionSubmissionReadyRef = useRef(new Map());
   const pollingInFlightRef = useRef(false);
   const submitLockRef = useRef(false);
   const autoSubmitTriggeredRef = useRef(false);
@@ -308,9 +309,6 @@ const AssessmentAttemptPage = () => {
     const result = submissionStatuses[question.id];
     return FINAL_STATES.has(result?.status) && result?.verdict !== 'accepted';
   }).length;
-  const allQuestionsSubmitted = questions.length > 0 && questions.every((question) => Boolean(submissionIds[question.id]));
-  const allQuestionSubmissionsSettled = allQuestionsSubmitted && questions.every((question) => FINAL_STATES.has(submissionStatuses[question.id]?.status));
-
   const updateQuestionSubmissionStatus = useCallback((questionId, nextStatus) => {
     const updated = { ...submissionStatusesRef.current, [questionId]: nextStatus };
     submissionStatusesRef.current = updated;
@@ -459,7 +457,7 @@ const AssessmentAttemptPage = () => {
     }
   }, [resumeClientEvaluation]);
 
-  const createAndEvaluateClientSubmission = useCallback(async (question, sourceCode) => {
+  const createAndEvaluateClientSubmission = useCallback(async (question, sourceCode, onSubmissionSaved = () => {}) => {
     if (!assignment?.id) throw new Error('The assignment is not ready for submission.');
     if (!supportsWasmRunner()) {
       throw new Error('This browser does not support WebAssembly workers. Please use a current version of Chrome, Edge, Firefox, or Safari.');
@@ -507,6 +505,7 @@ const AssessmentAttemptPage = () => {
       client_processing: false,
       client_error: false,
     });
+    onSubmissionSaved();
 
     if (response.data.status === 'completed' && response.data.result) {
       updateQuestionSubmissionStatus(question.id, response.data.result);
@@ -757,16 +756,17 @@ const AssessmentAttemptPage = () => {
       !assignment
       || !questions.length
       || finalized
-      || (!automatic && assignment.is_flagged_cheating)
       || submitLockRef.current
-      || questionSubmitLocksRef.current.size
     ) return;
-    if (!automatic && (!allQuestionsSubmitted || !allQuestionSubmissionsSettled)) return;
     submitLockRef.current = true;
     setSubmitting(true);
     setShowSubmitConfirm(false);
 
     try {
+      const activeSubmissionRequests = [...questionSubmitLocksRef.current]
+        .map((questionId) => questionSubmissionReadyRef.current.get(questionId))
+        .filter(Boolean);
+      await Promise.all(activeSubmissionRequests);
       await flushDrafts();
       if (automatic) {
         const ids = { ...submissionIdsRef.current };
@@ -794,7 +794,7 @@ const AssessmentAttemptPage = () => {
       addNotification(
         automatic
           ? 'Time is up. Your assessment has been submitted; any saved pending evaluations will continue.'
-          : 'Assessment submitted. Your results have been saved.',
+          : 'Assessment submitted. Any saved pending evaluations will continue and update your results.',
         'success',
       );
       navigate('/student/dashboard', { replace: true });
@@ -806,13 +806,18 @@ const AssessmentAttemptPage = () => {
       submitLockRef.current = false;
       setSubmitting(false);
     }
-  }, [addNotification, allQuestionSubmissionsSettled, allQuestionsSubmitted, assignment, createAndEvaluateClientSubmission, finalized, flushDrafts, navigate, questions]);
+  }, [addNotification, assignment, createAndEvaluateClientSubmission, finalized, flushDrafts, navigate, questions]);
 
   const handleSubmitQuestion = useCallback(async () => {
     const canResumePending = currentSubmissionPending && currentSubmission?.client_error;
     const questionId = currentQuestion?.id;
     if (!assignment || !currentQuestion || !canEdit || (currentSubmissionPending && !canResumePending) || questionSubmitLocksRef.current.has(questionId) || submitLockRef.current) return;
+    let markSubmissionReady;
+    const submissionReady = new Promise((resolve) => {
+      markSubmissionReady = resolve;
+    });
     questionSubmitLocksRef.current.add(questionId);
+    questionSubmissionReadyRef.current.set(questionId, submissionReady);
     setSubmittingQuestionIds((current) => new Set(current).add(questionId));
     setSubmissionErrors((current) => ({ ...current, [currentQuestion.id]: '' }));
     const sourceCode = codeRef.current[currentQuestion.id] ?? DEFAULT_CODE;
@@ -820,10 +825,11 @@ const AssessmentAttemptPage = () => {
     try {
       await saveDraftNow(currentQuestion.id, sourceCode);
       if (canResumePending) {
+        markSubmissionReady();
         await resumeClientEvaluation(currentQuestion.id, currentSubmission);
         addNotification(`Question ${currentQuestion.order} evaluation resumed.`, 'success');
       } else {
-        await createAndEvaluateClientSubmission(currentQuestion, sourceCode);
+        await createAndEvaluateClientSubmission(currentQuestion, sourceCode, markSubmissionReady);
         addNotification(`Question ${currentQuestion.order} submitted and evaluated.`, 'success');
       }
     } catch (submitError) {
@@ -831,7 +837,11 @@ const AssessmentAttemptPage = () => {
       setSubmissionErrors((items) => ({ ...items, [currentQuestion.id]: message }));
       addNotification(message, 'error', 7000);
     } finally {
+      markSubmissionReady();
       questionSubmitLocksRef.current.delete(questionId);
+      if (questionSubmissionReadyRef.current.get(questionId) === submissionReady) {
+        questionSubmissionReadyRef.current.delete(questionId);
+      }
       setSubmittingQuestionIds((current) => {
         const updated = new Set(current);
         updated.delete(questionId);
@@ -1672,8 +1682,8 @@ const AssessmentAttemptPage = () => {
                   ? currentSubmission?.client_error ? 'Resume evaluation' : 'Evaluating question'
                   : submissionIds[currentQuestion.id] ? 'Submit question again' : 'Submit question'}
               </Button>
-              {allQuestionsSubmitted && (
-                <Button size="sm" loading={submitting} disabled={assignment.is_flagged_cheating || finalized || submitting || submittingQuestionIds.size > 0 || !allQuestionSubmissionsSettled}
+              {assignment.status === 'started' && !finalized && (
+                <Button size="sm" loading={submitting} disabled={submitting}
                   onClick={() => setShowSubmitConfirm(true)}>
                   <CheckCircle2 size={14} />Submit assessment
                 </Button>
@@ -1690,12 +1700,12 @@ const AssessmentAttemptPage = () => {
         footer={(
           <>
             <Button variant="secondary" onClick={() => setShowSubmitConfirm(false)}>Keep working</Button>
-            <Button variant="danger" loading={submitting} disabled={assignment.is_flagged_cheating || !allQuestionSubmissionsSettled} onClick={() => performFinalSubmit(false)}>Submit assessment</Button>
+            <Button variant="danger" loading={submitting} disabled={submitting} onClick={() => performFinalSubmit(false)}>Submit assessment</Button>
           </>
         )}
       >
         <p className="text-sm leading-6 text-slate-600 dark:text-slate-300">
-          Your submitted answers will be finalized and the assessment will close. You can still edit and re-submit any question until you finish the assessment.
+          Submitting now will close the assessment. Questions without a saved submission will count as unanswered. Any saved question evaluations that are still running will finish and update your results afterward.
         </p>
         {deadlineAt && remainingSeconds <= 300 && <p className="mt-3 text-sm font-medium text-amber-700 dark:text-amber-300">Time remaining: {remainingLabel}</p>}
       </Modal>
