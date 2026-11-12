@@ -12,6 +12,7 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "desktop:dev": "cargo tauri dev",
+    "desktop:prepare-gcc": "node scripts/prepare-gcc-bundle.mjs",
     "desktop:build": "cargo tauri build",
     "desktop:build:windows": "cargo tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc"
   },

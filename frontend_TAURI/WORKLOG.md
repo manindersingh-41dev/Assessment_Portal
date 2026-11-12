@@ -23,10 +23,17 @@ This log records implementation work performed in `frontend_TAURI/`. The separat
 - Frontend lint/build could not run in this execution environment because `npm` is not installed. Native Windows validation still requires the Windows build environment listed above.
 - Configured `.env.production` for the user's Render backend and added a `desktop:build:windows` cross-build script using Tauri's documented `cargo-xwin` route. The current shell has Cargo/Rust but no Node/npm, NSIS, or LLVM cross-build tools, so no installer was generated.
 
+## 2026-11-12
+
+- Changed the Windows release build to stage MSYS2 UCRT64 into the app's Tauri resource bundle. The Windows-only staging preflight verifies GCC's headers, runtime library, C frontend, and a compiled program before packaging.
+- Updated the Rust runner to resolve GCC from the bundled resource path and add its `bin` folder to the environment for compilation and execution. `GEETA_GCC_PATH` remains a developer override; development can fall back to `PATH`.
+- Updated Windows packaging and rollout documentation. The compiler payload remains ignored by Git and is generated from the build computer's MSYS2 installation.
+- Static JSON and whitespace checks pass. This Debian environment has no Node.js and no configured Rust toolchain, so the Windows staging smoke check and installer build could not run here.
+
 ## Next
 
-- Run `cargo check` and launch `npm run desktop:dev` on Windows; Rust/Cargo are unavailable on this Linux host.
-- Install GCC on a Windows laptop and verify it is discoverable from `PATH` or `GEETA_GCC_PATH`.
+- Build the Windows installer with MSYS2 UCRT64 installed; the build stages and bundles GCC and runs a smoke check on Windows.
+- Install the resulting app on a clean Windows laptop and verify C compile/run works without a separate GCC installation.
 - Add and validate a Windows access-control sandbox before student release; Job Objects currently limit resources and processes but do not block file or network access.
 - Confirm the deployed backend allows `http://tauri.localhost` in CORS, then build and smoke-test the NSIS installer with its production API URL.
 - Continue app-specific work in this folder and append a dated entry after each meaningful change or check.

@@ -8,6 +8,8 @@ use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+#[cfg(target_os = "windows")]
+use tauri::Manager;
 
 const MAX_SOURCE_BYTES: usize = 100_000;
 const MAX_CASES: usize = 250;
@@ -284,13 +286,15 @@ impl ProcessJob {
 }
 
 #[tauri::command]
-fn detect_gcc() -> Result<String, String> {
-    let compiler = compiler_program();
-    let output = Command::new(&compiler)
-        .arg("--version")
+fn detect_gcc(app: tauri::AppHandle) -> Result<String, String> {
+    let compiler = compiler_program(&app);
+    let mut command = Command::new(&compiler);
+    command.arg("--version");
+    add_compiler_bin_to_path(&mut command, &compiler);
+    let output = command
         .output()
         .map_err(|error| format!(
-            "Could not start GCC at {}: {error}. Install GCC and add it to PATH, or set GEETA_GCC_PATH to gcc.exe.",
+            "Could not start GCC at {}: {error}. The bundled compiler may be missing or incomplete.",
             compiler.display()
         ))?;
 
@@ -302,13 +306,41 @@ fn detect_gcc() -> Result<String, String> {
     Ok(version_output.lines().next().unwrap_or("GCC (version unknown)").to_string())
 }
 
-fn compiler_program() -> PathBuf {
+fn compiler_program(app: &tauri::AppHandle) -> PathBuf {
+    #[cfg(not(target_os = "windows"))]
+    let _ = app;
+
     if let Some(configured_path) = std::env::var_os("GEETA_GCC_PATH").filter(|path| !path.is_empty()) {
         return PathBuf::from(configured_path);
     }
 
+    #[cfg(target_os = "windows")]
+    if let Ok(bundled_path) = app.path().resolve(
+        "gcc/ucrt64/bin/gcc.exe",
+        tauri::path::BaseDirectory::Resource,
+    ) {
+        if bundled_path.is_file() {
+            return bundled_path;
+        }
+    }
+
     let executable_name = if cfg!(windows) { "gcc.exe" } else { "gcc" };
     PathBuf::from(executable_name)
+}
+
+fn add_compiler_bin_to_path(command: &mut Command, compiler_program: &Path) {
+    let Some(bin_directory) = compiler_program
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+    else {
+        return;
+    };
+
+    let mut search_paths = vec![bin_directory.to_path_buf()];
+    search_paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()));
+    if let Ok(path) = std::env::join_paths(search_paths) {
+        command.env("PATH", path);
+    }
 }
 
 fn create_workspace() -> Result<TempWorkspace, String> {
@@ -537,8 +569,10 @@ fn run_submission(
         return Err("Test case inputs exceed the 2 MB execution limit.".to_string());
     }
 
-    let compiler_output = Command::new(&compiler_program)
-        .arg("--version")
+    let mut version_command = Command::new(&compiler_program);
+    version_command.arg("--version");
+    add_compiler_bin_to_path(&mut version_command, &compiler_program);
+    let compiler_output = version_command
         .output()
         .map_err(|error| format!("GCC is unavailable at {}: {error}", compiler_program.display()))?;
     if !compiler_output.status.success() {
@@ -563,6 +597,7 @@ fn run_submission(
         .arg("-o")
         .arg(&executable_path)
         .current_dir(workspace.path());
+    add_compiler_bin_to_path(&mut compiler, &compiler_program);
     let compile = run_process(
         compiler,
         None,
@@ -607,6 +642,7 @@ fn run_submission(
         let output_limit = remaining_output_bytes.min(MAX_CASE_OUTPUT_BYTES);
         let mut execution = Command::new(&executable_path);
         execution.current_dir(workspace.path());
+        add_compiler_bin_to_path(&mut execution, &compiler_program);
         let result = run_process(
             execution,
             Some(test_case.input),
@@ -663,6 +699,7 @@ fn run_submission(
 
 #[tauri::command]
 async fn run_c_submission(
+    app: tauri::AppHandle,
     state: tauri::State<'_, RunnerState>,
     run_id: String,
     source_code: String,
@@ -680,7 +717,7 @@ async fn run_c_submission(
         active_runs.insert(run_id.clone(), Arc::clone(&cancellation));
     }
 
-    let compiler_program = compiler_program();
+    let compiler_program = compiler_program(&app);
     let result = tauri::async_runtime::spawn_blocking(move || {
         run_submission(source_code, test_cases, time_limit_seconds, compiler_program, cancellation)
     })

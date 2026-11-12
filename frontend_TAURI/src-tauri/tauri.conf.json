@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "npm run dev -- --host 127.0.0.1 --strictPort --no-open",
     "devUrl": "http://127.0.0.1:3000",
-    "beforeBuildCommand": "node scripts/check-desktop-env.mjs && npm run build",
+    "beforeBuildCommand": "node scripts/check-desktop-env.mjs && node scripts/prepare-gcc-bundle.mjs && npm run build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -53,6 +53,9 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "resources": {
+      "../resources/gcc/ucrt64/": "gcc/ucrt64/"
+    },
     "category": "Education",
     "shortDescription": "Geeta University coding assessment client",
     "longDescription": "Desktop client for Geeta University coding assessments."
