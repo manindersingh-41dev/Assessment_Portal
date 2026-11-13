@@ -78,7 +78,7 @@ const StudentAccessPage = () => {
   }, [lockFilter, search, sortOrder, students]);
 
   const lockedCount = students.filter((student) => student.login_locked).length;
-  const scoredStudentCount = students.filter((student) => student.average_score != null).length;
+  const scoredStudentCount = students.filter((student) => student.graded_assessment_count > 0).length;
 
   const clearLoginLock = async (student) => {
     const confirmed = window.confirm(
@@ -141,7 +141,7 @@ const StudentAccessPage = () => {
         </Card>
         <Card className="flex items-center gap-3 p-4">
           <span className="rounded-lg bg-emerald-50 p-2 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300"><GraduationCap size={18} /></span>
-          <div><p className="text-xs text-slate-500">Students with graded scores</p><p className="text-xl font-bold text-slate-900 dark:text-white">{scoredStudentCount}</p></div>
+          <div><p className="text-xs text-slate-500">Students with graded results</p><p className="text-xl font-bold text-slate-900 dark:text-white">{scoredStudentCount}</p></div>
         </Card>
       </div>
 
@@ -171,7 +171,7 @@ const StudentAccessPage = () => {
         </div>
 
         <p className="mb-3 text-xs text-slate-500">
-          Showing {filteredStudents.length} of {students.length}. Average scores use your graded assessments only.
+          Showing {filteredStudents.length} of {students.length}. The average includes graded results and missed assessments as 0% after their deadline; upcoming and ungraded assessments are excluded.
         </p>
 
         {loading ? (
@@ -207,11 +207,13 @@ const StudentAccessPage = () => {
                     </td>
                     <td className="px-4 py-4">
                       {student.average_score == null ? (
-                        <span className="text-slate-500">No graded scores</span>
+                        <span className="text-slate-500">No finalized outcomes</span>
                       ) : (
                         <>
                           <p className="font-semibold text-slate-900 dark:text-white">{Number(student.average_score).toFixed(1)}%</p>
-                          <p className="mt-1 text-xs text-slate-500">{student.graded_assessment_count} graded</p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            {student.graded_assessment_count} graded{student.missed_assessment_count > 0 ? ` · ${student.missed_assessment_count} missed (0%)` : ''}
+                          </p>
                         </>
                       )}
                     </td>

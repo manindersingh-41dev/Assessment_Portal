@@ -19,7 +19,21 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 from django.db import IntegrityError, transaction
-from django.db.models import Avg, Count, FloatField, IntegerField, OuterRef, Q, Subquery
+from django.db.models import (
+    Case,
+    Count,
+    ExpressionWrapper,
+    F,
+    FloatField,
+    IntegerField,
+    OuterRef,
+    Q,
+    Subquery,
+    Sum,
+    Value,
+    When,
+)
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 
 from assessments.models import AssessmentAssignment, AssessmentResult
@@ -68,6 +82,7 @@ class StudentDirectorySerializer(serializers.ModelSerializer):
     year_of_study = serializers.SerializerMethodField()
     average_score = serializers.FloatField(read_only=True, allow_null=True)
     graded_assessment_count = serializers.IntegerField(read_only=True)
+    missed_assessment_count = serializers.IntegerField(read_only=True)
     assigned_assessment_count = serializers.IntegerField(read_only=True)
     completed_assessment_count = serializers.IntegerField(read_only=True)
 
@@ -84,6 +99,7 @@ class StudentDirectorySerializer(serializers.ModelSerializer):
             "last_login",
             "average_score",
             "graded_assessment_count",
+            "missed_assessment_count",
             "assigned_assessment_count",
             "completed_assessment_count",
             "login_locked",
@@ -99,6 +115,7 @@ class StudentDirectorySerializer(serializers.ModelSerializer):
                 "last_login",
                 "average_score",
                 "graded_assessment_count",
+                "missed_assessment_count",
                 "assigned_assessment_count",
                 "completed_assessment_count",
             ):
@@ -146,6 +163,7 @@ class StudentDirectoryView(APIView):
             is_active=True,
         ).order_by("last_name", "first_name", "email")
         if include_summary:
+            now = timezone.now()
             result_summary = (
                 AssessmentResult.objects.filter(
                     student_id=OuterRef("pk"),
@@ -154,37 +172,116 @@ class StudentDirectoryView(APIView):
                 .order_by()
                 .values("student_id")
                 .annotate(
-                    average_score=Avg("percentage"),
+                    total_score=Sum("percentage"),
                     graded_count=Count("id"),
                 )
             )
-            students_query = students_query.select_related("student_profile").annotate(
-                average_score=Subquery(
-                    result_summary.values("average_score")[:1],
-                    output_field=FloatField(),
-                ),
-                graded_assessment_count=Subquery(
-                    result_summary.values("graded_count")[:1],
-                    output_field=IntegerField(),
-                ),
-                assigned_assessment_count=Count(
-                    "assessment_assignments",
-                    filter=Q(
-                        assessment_assignments__assessment__created_by=request.user,
+            assignment_summary = (
+                AssessmentAssignment.objects.filter(
+                    student_id=OuterRef("pk"),
+                    assessment__created_by=request.user,
+                )
+                .order_by()
+                .values("student_id")
+                .annotate(
+                    assigned_count=Count("id"),
+                    completed_count=Count(
+                        "id",
+                        filter=Q(
+                            status__in=[
+                                AssessmentAssignment.Status.SUBMITTED,
+                                AssessmentAssignment.Status.GRADED,
+                            ]
+                        ),
                     ),
-                    distinct=True,
-                ),
-                completed_assessment_count=Count(
-                    "assessment_assignments",
-                    filter=Q(
-                        assessment_assignments__assessment__created_by=request.user,
-                        assessment_assignments__status__in=[
-                            AssessmentAssignment.Status.SUBMITTED,
-                            AssessmentAssignment.Status.GRADED,
-                        ],
+                )
+            )
+            missed_deadline = (
+                Q(status=AssessmentAssignment.Status.EXPIRED)
+                | (
+                    Q(status=AssessmentAssignment.Status.ASSIGNED)
+                    & (Q(assessment__end_time__lt=now) | Q(due_at__lt=now))
+                )
+                | (
+                    Q(status=AssessmentAssignment.Status.STARTED)
+                    & (
+                        Q(due_at__lt=now)
+                        | Q(assessment__is_timed=True, assessment__end_time__lt=now)
+                    )
+                )
+            )
+            missed_summary = (
+                AssessmentAssignment.objects.filter(
+                    student_id=OuterRef("pk"),
+                    assessment__created_by=request.user,
+                )
+                .filter(missed_deadline)
+                .order_by()
+                .values("student_id")
+                .annotate(missed_count=Count("id"))
+            )
+            students_query = (
+                students_query.select_related("student_profile")
+                .annotate(
+                    total_score=Coalesce(
+                        Subquery(
+                            result_summary.values("total_score")[:1],
+                            output_field=FloatField(),
+                        ),
+                        Value(0.0),
+                        output_field=FloatField(),
                     ),
-                    distinct=True,
-                ),
+                    graded_assessment_count=Coalesce(
+                        Subquery(
+                            result_summary.values("graded_count")[:1],
+                            output_field=IntegerField(),
+                        ),
+                        Value(0),
+                        output_field=IntegerField(),
+                    ),
+                    missed_assessment_count=Coalesce(
+                        Subquery(
+                            missed_summary.values("missed_count")[:1],
+                            output_field=IntegerField(),
+                        ),
+                        Value(0),
+                        output_field=IntegerField(),
+                    ),
+                    assigned_assessment_count=Coalesce(
+                        Subquery(
+                            assignment_summary.values("assigned_count")[:1],
+                            output_field=IntegerField(),
+                        ),
+                        Value(0),
+                        output_field=IntegerField(),
+                    ),
+                    completed_assessment_count=Coalesce(
+                        Subquery(
+                            assignment_summary.values("completed_count")[:1],
+                            output_field=IntegerField(),
+                        ),
+                        Value(0),
+                        output_field=IntegerField(),
+                    ),
+                )
+                .annotate(
+                    average_assessment_count=(
+                        F("graded_assessment_count") + F("missed_assessment_count")
+                    ),
+                )
+                .annotate(
+                    average_score=Case(
+                        When(
+                            average_assessment_count__gt=0,
+                            then=ExpressionWrapper(
+                                F("total_score") / F("average_assessment_count"),
+                                output_field=FloatField(),
+                            ),
+                        ),
+                        default=Value(None, output_field=FloatField()),
+                        output_field=FloatField(),
+                    )
+                )
             )
         students = list(students_query)
 
