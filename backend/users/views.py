@@ -19,9 +19,10 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 from django.db import IntegrityError, transaction
-from django.db.models import Count
+from django.db.models import Avg, Count, FloatField, IntegerField, OuterRef, Q, Subquery
 from django.utils import timezone
 
+from assessments.models import AssessmentAssignment, AssessmentResult
 from .models import User, StudentProfile, FacultyProfile, LoginAttempt
 from .serializers import (
     StudentRegistrationSerializer,
@@ -59,13 +60,68 @@ def _registration_conflict_details(error):
 
 
 class StudentDirectorySerializer(serializers.ModelSerializer):
-    """Minimal student information needed for assessment assignment."""
+    """Student access and faculty-scoped performance summary."""
 
     login_locked = serializers.SerializerMethodField()
+    roll_number = serializers.SerializerMethodField()
+    department = serializers.SerializerMethodField()
+    year_of_study = serializers.SerializerMethodField()
+    average_score = serializers.FloatField(read_only=True, allow_null=True)
+    graded_assessment_count = serializers.IntegerField(read_only=True)
+    assigned_assessment_count = serializers.IntegerField(read_only=True)
+    completed_assessment_count = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = User
-        fields = ["id", "email", "first_name", "last_name", "login_locked"]
+        fields = [
+            "id",
+            "email",
+            "first_name",
+            "last_name",
+            "roll_number",
+            "department",
+            "year_of_study",
+            "last_login",
+            "average_score",
+            "graded_assessment_count",
+            "assigned_assessment_count",
+            "completed_assessment_count",
+            "login_locked",
+        ]
+
+    def get_fields(self):
+        fields = super().get_fields()
+        if not self.context.get("include_summary"):
+            for field_name in (
+                "roll_number",
+                "department",
+                "year_of_study",
+                "last_login",
+                "average_score",
+                "graded_assessment_count",
+                "assigned_assessment_count",
+                "completed_assessment_count",
+            ):
+                fields.pop(field_name, None)
+        return fields
+
+    def get_roll_number(self, student):
+        try:
+            return student.student_profile.roll_number
+        except StudentProfile.DoesNotExist:
+            return None
+
+    def get_department(self, student):
+        try:
+            return student.student_profile.department
+        except StudentProfile.DoesNotExist:
+            return None
+
+    def get_year_of_study(self, student):
+        try:
+            return student.student_profile.year_of_study
+        except StudentProfile.DoesNotExist:
+            return None
 
     def get_login_locked(self, student):
         locked_emails = self.context.get("locked_emails", set())
@@ -84,9 +140,53 @@ class StudentDirectoryView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        students = list(User.objects.filter(
-            role=User.ROLE_STUDENT, is_active=True
-        ).order_by("last_name", "first_name", "email"))
+        include_summary = request.query_params.get("include_summary") == "true"
+        students_query = User.objects.filter(
+            role=User.ROLE_STUDENT,
+            is_active=True,
+        ).order_by("last_name", "first_name", "email")
+        if include_summary:
+            result_summary = (
+                AssessmentResult.objects.filter(
+                    student_id=OuterRef("pk"),
+                    assessment__created_by=request.user,
+                )
+                .order_by()
+                .values("student_id")
+                .annotate(
+                    average_score=Avg("percentage"),
+                    graded_count=Count("id"),
+                )
+            )
+            students_query = students_query.select_related("student_profile").annotate(
+                average_score=Subquery(
+                    result_summary.values("average_score")[:1],
+                    output_field=FloatField(),
+                ),
+                graded_assessment_count=Subquery(
+                    result_summary.values("graded_count")[:1],
+                    output_field=IntegerField(),
+                ),
+                assigned_assessment_count=Count(
+                    "assessment_assignments",
+                    filter=Q(
+                        assessment_assignments__assessment__created_by=request.user,
+                    ),
+                    distinct=True,
+                ),
+                completed_assessment_count=Count(
+                    "assessment_assignments",
+                    filter=Q(
+                        assessment_assignments__assessment__created_by=request.user,
+                        assessment_assignments__status__in=[
+                            AssessmentAssignment.Status.SUBMITTED,
+                            AssessmentAssignment.Status.GRADED,
+                        ],
+                    ),
+                    distinct=True,
+                ),
+            )
+        students = list(students_query)
 
         student_emails = {student.email.lower() for student in students}
         cutoff = timezone.now() - timedelta(
@@ -107,7 +207,10 @@ class StudentDirectoryView(APIView):
             StudentDirectorySerializer(
                 students,
                 many=True,
-                context={"locked_emails": locked_emails},
+                context={
+                    "include_summary": include_summary,
+                    "locked_emails": locked_emails,
+                },
             ).data
         )
 
