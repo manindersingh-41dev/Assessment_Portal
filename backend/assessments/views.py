@@ -39,8 +39,8 @@ from .permissions import (
 from .services import AssessmentService, AssignmentService
 from .notifications import (
     send_assignment_notifications,
-    send_assessment_publication_notifications,
-    send_notification_group,
+    queue_assessment_publication_notifications,
+    queue_notification_group,
 )
 
 
@@ -180,7 +180,7 @@ class AssessmentViewSet(viewsets.ModelViewSet):
             'updated_at',
         ])
         if not was_published:
-            send_assessment_publication_notifications(assessment)
+            queue_assessment_publication_notifications(assessment.id)
 
         return Response(
             {
@@ -518,32 +518,35 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        batch_notifications = AssessmentNotification.objects.filter(
+        batch_notification_ids = list(AssessmentNotification.objects.filter(
             email_batch_id=notification.email_batch_id,
             kind=notification.kind,
             status__in=[
                 AssessmentNotification.Status.FAILED,
                 AssessmentNotification.Status.PENDING,
             ],
-        )
-        batch_notifications.update(
-            status=AssessmentNotification.Status.PENDING,
-            scheduled_for=timezone.now(),
-            attempts=0,
-            last_error='',
-            updated_at=timezone.now(),
-        )
-        batch_notifications = list(batch_notifications)
-        send_notification_group(batch_notifications, notification.email_batch_id)
-        notification.refresh_from_db(fields=['status', 'last_error'])
-        if notification.status == AssessmentNotification.Status.FAILED:
-            return Response(
-                {'error': notification.last_error or 'The email could not be sent.'},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        ).values_list('id', flat=True))
+        retry_time = timezone.now()
+        with transaction.atomic():
+            AssessmentNotification.objects.filter(
+                id__in=batch_notification_ids
+            ).update(
+                status=AssessmentNotification.Status.PENDING,
+                scheduled_for=retry_time,
+                attempts=0,
+                last_error='',
+                updated_at=retry_time,
+            )
+            batch_notifications = list(
+                AssessmentNotification.objects.filter(id__in=batch_notification_ids)
+            )
+            queue_notification_group(
+                batch_notifications,
+                notification.email_batch_id,
             )
         return Response(
-            {'message': 'Email sent.', 'status': notification.status},
-            status=status.HTTP_200_OK,
+            {'message': 'Email queued for delivery.', 'status': AssessmentNotification.Status.QUEUED},
+            status=status.HTTP_202_ACCEPTED,
         )
 
     @action(detail=True, methods=['get', 'put'], url_path='drafts')

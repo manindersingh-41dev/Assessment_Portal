@@ -104,7 +104,7 @@ const AssessmentDetailsPage = () => {
     setRetryingNotificationId(notificationId);
     try {
       await api.post(endpoints.assessments.retryNotification(assignmentId, notificationId));
-      addNotification('Email sent.', 'success');
+      addNotification('Email queued for delivery.', 'success');
       await fetchAssessment();
     } catch (error) {
       addNotification(error.response?.data?.error || 'Could not retry this email.', 'error');
@@ -278,7 +278,7 @@ const AssessmentDetailsPage = () => {
                           </div>
                           {notification.recipient_count > 1 && (
                             <p className="mt-1 text-slate-500">
-                              One group email to {notification.recipient_count} students (one in To, others in BCC).
+                              One group email to {notification.recipient_count} students: one in To, maninder.singh@geetauniversity.edu.in in CC, and the rest in BCC.
                             </p>
                           )}
                           {notification.status === 'failed' && notification.last_error && (

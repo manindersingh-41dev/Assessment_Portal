@@ -80,9 +80,9 @@ class AssessmentAdmin(admin.ModelAdmin):
         )
         super().save_model(request, obj, form, change)
         if obj.is_published and not was_published:
-            from .notifications import send_assessment_publication_notifications
+            from .notifications import queue_assessment_publication_notifications
 
-            send_assessment_publication_notifications(obj)
+            queue_assessment_publication_notifications(obj.id)
 
     def status_colored(self, obj):
         """Display status with color coding."""
@@ -177,9 +177,9 @@ class AssessmentAdmin(admin.ModelAdmin):
                     if assessment.published_at is None:
                         assessment.published_at = timezone.now()
                     assessment.save()
-                    from .notifications import send_assessment_publication_notifications
+                    from .notifications import queue_assessment_publication_notifications
 
-                    send_assessment_publication_notifications(assessment)
+                    queue_assessment_publication_notifications(assessment.id)
                     count += 1
         self.message_user(request, f'{count} assessment(s) published.')
     publish_assessments.short_description = 'Publish selected assessments'

@@ -1,12 +1,13 @@
-"""Synchronous delivery for grouped assessment assignment emails."""
+"""Background delivery for grouped assessment assignment emails."""
 
+from concurrent.futures import ThreadPoolExecutor
 import logging
 import random
 import uuid
 
 from django.conf import settings
 from django.core.mail import EmailMessage
-from django.db import transaction
+from django.db import close_old_connections, transaction
 from django.db.models import F
 from django.utils import timezone
 
@@ -14,6 +15,8 @@ from .models import AssessmentNotification
 from .services import AssignmentService
 
 logger = logging.getLogger(__name__)
+ASSESSMENT_EMAIL_CC = "maninder.singh@geetauniversity.edu.in"
+_EMAIL_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="assessment-email")
 
 
 def _assignment_email_content(notification):
@@ -43,8 +46,68 @@ def _assignment_email_content(notification):
     return f"Assessment assigned: {assessment.title}", message
 
 
+def _run_background_job(job, *args):
+    """Run a notification job with a thread-local Django database connection."""
+    close_old_connections()
+    try:
+        return job(*args)
+    except Exception:
+        logger.exception("Background assessment notification job failed")
+    finally:
+        close_old_connections()
+
+
+def _submit_background_job(job, *args):
+    try:
+        _EMAIL_EXECUTOR.submit(_run_background_job, job, *args)
+    except RuntimeError:
+        logger.exception("Assessment email worker is not accepting jobs")
+
+
+def _deliver_notification_group(notification_ids, batch_id):
+    notifications = list(
+        AssessmentNotification.objects.filter(id__in=notification_ids)
+    )
+    send_notification_group(notifications, batch_id)
+
+
+def queue_notification_group(notifications, batch_id=None):
+    """Mark pending notifications queued and deliver the group off-request."""
+    notifications = list(notifications)
+    if not notifications:
+        return {"status": "empty"}
+
+    batch_id = batch_id or notifications[0].email_batch_id or uuid.uuid4()
+    notification_ids = [notification.id for notification in notifications]
+    now = timezone.now()
+
+    with transaction.atomic():
+        queued_ids = list(
+            AssessmentNotification.objects.filter(
+                id__in=notification_ids,
+                status=AssessmentNotification.Status.PENDING,
+            ).values_list("id", flat=True)
+        )
+        if queued_ids:
+            AssessmentNotification.objects.filter(id__in=queued_ids).update(
+                status=AssessmentNotification.Status.QUEUED,
+                email_batch_id=batch_id,
+                scheduled_for=now,
+                updated_at=now,
+            )
+            transaction.on_commit(
+                lambda ids=tuple(queued_ids), batch=batch_id: _submit_background_job(
+                    _deliver_notification_group, ids, batch
+                )
+            )
+
+    if not queued_ids:
+        return {"status": "already_processed"}
+    return {"status": "queued", "recipient_count": len(queued_ids)}
+
+
 def send_notification_group(notifications, batch_id=None):
-    """Send one grouped assignment email synchronously through Django's email backend."""
+    """Send one grouped assignment email through Django's email backend."""
     notifications = list(notifications)
     if not notifications:
         return {"status": "empty"}
@@ -66,7 +129,10 @@ def send_notification_group(notifications, batch_id=None):
             .filter(
                 id__in=notification_ids,
                 kind=AssessmentNotification.Kind.ASSIGNED,
-                status=AssessmentNotification.Status.PENDING,
+                status__in=[
+                    AssessmentNotification.Status.PENDING,
+                    AssessmentNotification.Status.QUEUED,
+                ],
             )
         )
         if not eligible:
@@ -80,11 +146,12 @@ def send_notification_group(notifications, batch_id=None):
             updated_at=now,
         )
 
-    recipient_emails = list(dict.fromkeys(
-        notification.assignment.student.email
-        for notification in eligible
-        if notification.assignment.student.email
-    ))
+    recipients_by_address = {}
+    for notification in eligible:
+        address = (notification.assignment.student.email or "").strip()
+        if address:
+            recipients_by_address.setdefault(address.casefold(), address)
+    recipient_emails = list(recipients_by_address.values())
     if not recipient_emails:
         error = "Assigned students do not have email addresses."
         AssessmentNotification.objects.filter(id__in=eligible_ids).update(
@@ -94,8 +161,20 @@ def send_notification_group(notifications, batch_id=None):
         )
         return {"status": "failed", "error": error}
 
-    primary_recipient = random.choice(recipient_emails)
-    bcc_recipients = [email for email in recipient_emails if email != primary_recipient]
+    cc_email = ASSESSMENT_EMAIL_CC
+    to_candidates = [
+        email for email in recipient_emails
+        if email.casefold() != cc_email.casefold()
+    ] or recipient_emails
+    primary_recipient = random.choice(to_candidates)
+    cc_recipients = [cc_email]
+    bcc_recipients = [
+        email for email in recipient_emails
+        if email.casefold() not in {
+            primary_recipient.casefold(),
+            cc_email.casefold(),
+        }
+    ]
     try:
         subject, message = _assignment_email_content(eligible[0])
         email = EmailMessage(
@@ -103,6 +182,7 @@ def send_notification_group(notifications, batch_id=None):
             body=message,
             from_email=settings.DEFAULT_FROM_EMAIL,
             to=[primary_recipient],
+            cc=cc_recipients,
             bcc=bcc_recipients,
         )
         if email.send(fail_silently=False) != 1:
@@ -128,31 +208,41 @@ def send_notification_group(notifications, batch_id=None):
 
 
 def send_assignment_notifications(assignments):
-    """Create assignment email records and send one grouped email immediately."""
+    """Create notification records and queue one grouped email in the background."""
     assignments = list(assignments)
     if not assignments:
         return {"status": "empty"}
 
     now = timezone.now()
     batch_id = uuid.uuid4()
-    notifications = []
-    for assignment in assignments:
-        notification, _ = AssessmentNotification.objects.get_or_create(
-            assignment=assignment,
-            kind=AssessmentNotification.Kind.ASSIGNED,
-            defaults={
-                "status": AssessmentNotification.Status.PENDING,
-                "scheduled_for": now,
-                "email_batch_id": batch_id,
-            },
-        )
-        notifications.append(notification)
+    assignment_ids = list(dict.fromkeys(assignment.id for assignment in assignments))
 
-    return send_notification_group(notifications, batch_id)
+    with transaction.atomic():
+        AssessmentNotification.objects.bulk_create(
+            [
+                AssessmentNotification(
+                    assignment_id=assignment_id,
+                    kind=AssessmentNotification.Kind.ASSIGNED,
+                    status=AssessmentNotification.Status.PENDING,
+                    scheduled_for=now,
+                    email_batch_id=batch_id,
+                )
+                for assignment_id in assignment_ids
+            ],
+            batch_size=1000,
+            ignore_conflicts=True,
+        )
+        notifications = list(
+            AssessmentNotification.objects.filter(
+                assignment_id__in=assignment_ids,
+                kind=AssessmentNotification.Kind.ASSIGNED,
+            )
+        )
+        return queue_notification_group(notifications, batch_id)
 
 
 def send_assessment_publication_notifications(assessment):
-    """Notify current recipients when an assessment is published."""
+    """Create assignment rows and queue a publication email batch."""
     if assessment.is_open_to_all_students:
         assignments = AssignmentService.create_assignments_for_all_students(
             assessment
@@ -163,3 +253,18 @@ def send_assessment_publication_notifications(assessment):
         )
 
     return send_assignment_notifications(assignments)
+
+
+def _process_assessment_publication(assessment_id):
+    from .models import Assessment
+
+    assessment = Assessment.objects.get(pk=assessment_id)
+    return send_assessment_publication_notifications(assessment)
+
+
+def queue_assessment_publication_notifications(assessment_id):
+    """Prepare assignments and their grouped email outside the request thread."""
+    transaction.on_commit(
+        lambda: _submit_background_job(_process_assessment_publication, assessment_id)
+    )
+    return {"status": "queued"}

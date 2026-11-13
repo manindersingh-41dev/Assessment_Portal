@@ -209,10 +209,10 @@ class AssessmentCreateUpdateSerializer(serializers.ModelSerializer):
         assessment = super().create(validated_data)
         self._replace_questions(assessment, questions)
         if assessment.is_published:
-            from assessments.notifications import send_assessment_publication_notifications
+            from assessments.notifications import queue_assessment_publication_notifications
 
             transaction.on_commit(
-                lambda: send_assessment_publication_notifications(assessment)
+                lambda: queue_assessment_publication_notifications(assessment.id)
             )
         return assessment
 
@@ -227,10 +227,10 @@ class AssessmentCreateUpdateSerializer(serializers.ModelSerializer):
         if questions is not None:
             self._replace_questions(assessment, questions)
         if assessment.is_published and not was_published:
-            from assessments.notifications import send_assessment_publication_notifications
+            from assessments.notifications import queue_assessment_publication_notifications
 
             transaction.on_commit(
-                lambda: send_assessment_publication_notifications(assessment)
+                lambda: queue_assessment_publication_notifications(assessment.id)
             )
         return assessment
 
