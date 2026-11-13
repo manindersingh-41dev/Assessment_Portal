@@ -47,12 +47,16 @@ const statusLabel = (row) => {
 };
 
 const ACTIVE_EVALUATION_STATUSES = new Set(['pending', 'compiling', 'compiled', 'executing']);
+const hasActiveEvaluations = (resultSet) => (resultSet?.results || []).some((row) => (
+  row.question_results || []
+).some((question) => ACTIVE_EVALUATION_STATUSES.has(question.status)));
 
 const FacultyResultsPage = () => {
   const [assessments, setAssessments] = useState([]);
   const [assessmentLoading, setAssessmentLoading] = useState(true);
   const [assessmentError, setAssessmentError] = useState('');
   const [expandedAssessmentId, setExpandedAssessmentId] = useState(null);
+  const [backgroundRefreshAssessmentId, setBackgroundRefreshAssessmentId] = useState(null);
   const [assessmentResults, setAssessmentResults] = useState({});
   const [exportingAssessmentId, setExportingAssessmentId] = useState(null);
   const [search, setSearch] = useState('');
@@ -73,6 +77,7 @@ const FacultyResultsPage = () => {
       setAssessmentError('');
       setAssessmentResults({});
       setExpandedAssessmentId(null);
+      setBackgroundRefreshAssessmentId(null);
       const loadedAssessments = [];
       const visitedPages = new Set();
       let url = config.api.endpoints.assessments.list;
@@ -158,19 +163,16 @@ const FacultyResultsPage = () => {
   }, []);
 
   useEffect(() => {
-    if (!expandedAssessmentId) return undefined;
-    const resultSet = assessmentResults[expandedAssessmentId];
+    if (expandedAssessmentId || !backgroundRefreshAssessmentId) return undefined;
+    const resultSet = assessmentResults[backgroundRefreshAssessmentId];
     if (!resultSet?.loaded || resultSet.loading) return undefined;
-    const hasActiveEvaluations = (resultSet.results || []).some((row) => (
-      row.question_results || []
-    ).some((question) => ACTIVE_EVALUATION_STATUSES.has(question.status)));
-    if (!hasActiveEvaluations) return undefined;
+    if (!hasActiveEvaluations(resultSet)) return undefined;
 
     const interval = window.setInterval(() => {
-      loadAssessmentResults(expandedAssessmentId, resultSet.page || 1);
+      loadAssessmentResults(backgroundRefreshAssessmentId, resultSet.page || 1);
     }, 8000);
     return () => window.clearInterval(interval);
-  }, [assessmentResults, expandedAssessmentId, loadAssessmentResults]);
+  }, [assessmentResults, backgroundRefreshAssessmentId, expandedAssessmentId, loadAssessmentResults]);
 
   useEffect(() => () => {
     resultControllersRef.current.forEach((controller) => controller.abort());
@@ -187,8 +189,14 @@ const FacultyResultsPage = () => {
   const toggleAssessment = (assessmentId) => {
     if (expandedAssessmentId === assessmentId) {
       setExpandedAssessmentId(null);
+      setBackgroundRefreshAssessmentId(assessmentId);
+      const current = assessmentResults[assessmentId];
+      if (current?.loaded && !current.loading) {
+        loadAssessmentResults(assessmentId, current.page || 1);
+      }
       return;
     }
+    setBackgroundRefreshAssessmentId(null);
     setExpandedAssessmentId(assessmentId);
     const current = assessmentResults[assessmentId];
     if (!current?.loaded && !current?.loading) loadAssessmentResults(assessmentId, 1);
@@ -198,6 +206,7 @@ const FacultyResultsPage = () => {
     resultControllersRef.current.forEach((controller) => controller.abort());
     resultControllersRef.current.clear();
     setAssessmentResults({});
+    setBackgroundRefreshAssessmentId(null);
     setReloadKey((current) => current + 1);
   };
 
