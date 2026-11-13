@@ -9,7 +9,7 @@ const StudentPortalProtection = () => {
       const modifier = event.ctrlKey || event.metaKey;
       const inspectShortcut = modifier && event.shiftKey && ['i', 'j', 'c', 'k'].includes(key);
       const macInspectShortcut = event.metaKey && event.altKey && ['i', 'j', 'c'].includes(key);
-      const blocked = ['f11', 'f12'].includes(key)
+      const blocked = key === 'f12'
         || (modifier && key === 'u')
         || inspectShortcut
         || macInspectShortcut;

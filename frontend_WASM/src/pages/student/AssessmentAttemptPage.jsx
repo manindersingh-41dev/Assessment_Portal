@@ -1234,7 +1234,7 @@ const AssessmentAttemptPage = () => {
     updateCode(currentQuestion.id, DEFAULT_CODE, false);
   };
 
-  const requestAttemptFullscreen = async () => {
+  const requestAttemptFullscreen = useCallback(async () => {
     const tauriWindow = getTauriWindow();
     if (tauriWindow) {
       if (!await tauriWindow.isFullscreen()) await tauriWindow.setFullscreen(true);
@@ -1252,9 +1252,9 @@ const AssessmentAttemptPage = () => {
     const fullscreen = document.fullscreenElement === attemptRootRef.current;
     setIsFullscreen(fullscreen);
     return fullscreen;
-  };
+  }, []);
 
-  const enterFullscreen = async () => {
+  const enterFullscreen = useCallback(async () => {
     try {
       await requestAttemptFullscreen();
     } catch (fullscreenError) {
@@ -1263,7 +1263,19 @@ const AssessmentAttemptPage = () => {
         'warning',
       );
     }
-  };
+  }, [addNotification, requestAttemptFullscreen]);
+
+  useEffect(() => {
+    const onFullscreenShortcut = (event) => {
+      if (event.key.toLowerCase() !== 'f11' || finalized) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      void enterFullscreen();
+    };
+
+    document.addEventListener('keydown', onFullscreenShortcut, true);
+    return () => document.removeEventListener('keydown', onFullscreenShortcut, true);
+  }, [enterFullscreen, finalized]);
 
   const startAssessmentInFullscreen = async () => {
     if (!assignment?.id || !assessment || startingAttempt) return;
@@ -1389,8 +1401,8 @@ const AssessmentAttemptPage = () => {
           </div>
           <Button size="sm" variant="ghost" onClick={enterFullscreen}
             disabled={isFullscreen && assignment.status === 'started' && !finalized}
-            aria-label={isFullscreen ? 'Fullscreen active' : 'Return to fullscreen'}
-            title={isFullscreen ? 'Fullscreen active' : 'Return to fullscreen'}>
+            aria-label={isFullscreen ? 'Fullscreen active' : 'Enter fullscreen (F11)'}
+            title={isFullscreen ? 'Fullscreen active' : 'Enter fullscreen (F11)'}>
             {isFullscreen ? <Minimize size={16} /> : <Maximize size={16} />}
           </Button>
         </div>

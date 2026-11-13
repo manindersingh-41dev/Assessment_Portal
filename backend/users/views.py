@@ -19,6 +19,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 from django.db import IntegrityError, transaction
+from django.db.models import Count
 from django.utils import timezone
 
 from .models import User, StudentProfile, FacultyProfile, LoginAttempt
@@ -60,9 +61,15 @@ def _registration_conflict_details(error):
 class StudentDirectorySerializer(serializers.ModelSerializer):
     """Minimal student information needed for assessment assignment."""
 
+    login_locked = serializers.SerializerMethodField()
+
     class Meta:
         model = User
-        fields = ["id", "email", "first_name", "last_name"]
+        fields = ["id", "email", "first_name", "last_name", "login_locked"]
+
+    def get_login_locked(self, student):
+        locked_emails = self.context.get("locked_emails", set())
+        return student.email.lower() in locked_emails
 
 
 class StudentDirectoryView(APIView):
@@ -77,10 +84,32 @@ class StudentDirectoryView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        students = User.objects.filter(
+        students = list(User.objects.filter(
             role=User.ROLE_STUDENT, is_active=True
-        ).order_by("last_name", "first_name", "email")
-        return Response(StudentDirectorySerializer(students, many=True).data)
+        ).order_by("last_name", "first_name", "email"))
+
+        student_emails = {student.email.lower() for student in students}
+        cutoff = timezone.now() - timedelta(
+            minutes=AuthenticationService.LOGIN_ATTEMPT_WINDOW
+        )
+        failure_counts = (
+            LoginAttempt.objects.filter(success=False, attempted_at__gte=cutoff)
+            .values("email")
+            .annotate(attempt_count=Count("id"))
+            .filter(email__in=student_emails)
+        )
+        locked_emails = {
+            row["email"]
+            for row in failure_counts
+            if row["attempt_count"] >= AuthenticationService.MAX_LOGIN_ATTEMPTS
+        }
+        return Response(
+            StudentDirectorySerializer(
+                students,
+                many=True,
+                context={"locked_emails": locked_emails},
+            ).data
+        )
 
 
 class ClearStudentLoginLockView(APIView):

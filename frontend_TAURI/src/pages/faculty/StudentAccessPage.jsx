@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Search, UnlockKeyhole, Users } from 'lucide-react';
 import { Button } from '../../components/Button';
 import { Input } from '../../components/Input';
-import { Alert, Card, CardDescription, CardTitle } from '../../components/Common';
+import { Alert, Badge, Card, CardDescription, CardTitle } from '../../components/Common';
 import { useNotificationStore } from '../../store/notificationStore';
 import api from '../../api/client';
 import { config } from '../../constants/config';
@@ -60,6 +60,9 @@ const StudentAccessPage = () => {
       const response = await api.post(
         config.api.endpoints.users.clearLoginLock(student.id)
       );
+      setStudents((current) => current.map((item) => (
+        item.id === student.id ? { ...item, login_locked: false } : item
+      )));
       const clearedAttempts = response.data?.cleared_attempts ?? 0;
       const message = clearedAttempts
         ? `Cleared ${clearedAttempts} recent failed login attempt${clearedAttempts === 1 ? '' : 's'} for ${student.email}.`
@@ -118,6 +121,7 @@ const StudentAccessPage = () => {
                 <tr className="border-y border-slate-100 text-xs uppercase tracking-wide text-slate-500 dark:border-slate-800">
                   <th className="px-4 py-3 font-semibold">Student</th>
                   <th className="px-4 py-3 font-semibold">Email</th>
+                  <th className="px-4 py-3 font-semibold">Login status</th>
                   <th className="px-4 py-3 text-right font-semibold">Access</th>
                 </tr>
               </thead>
@@ -129,22 +133,31 @@ const StudentAccessPage = () => {
                     </td>
                     <td className="px-4 py-4 text-slate-600 dark:text-slate-300">{student.email}</td>
                     <td className="px-4 py-4 text-right">
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        icon={UnlockKeyhole}
-                        loading={pendingStudentId === student.id}
-                        disabled={pendingStudentId !== null && pendingStudentId !== student.id}
-                        onClick={() => clearLoginLock(student)}
-                      >
-                        Clear login lock
-                      </Button>
+                      <Badge variant={student.login_locked ? 'danger' : 'neutral'}>
+                        {student.login_locked ? 'Locked' : 'No lock'}
+                      </Badge>
+                    </td>
+                    <td className="px-4 py-4 text-right">
+                      {student.login_locked ? (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          icon={UnlockKeyhole}
+                          loading={pendingStudentId === student.id}
+                          disabled={pendingStudentId !== null && pendingStudentId !== student.id}
+                          onClick={() => clearLoginLock(student)}
+                        >
+                          Clear login lock
+                        </Button>
+                      ) : (
+                        <span className="text-slate-400">—</span>
+                      )}
                     </td>
                   </tr>
                 ))}
                 {filteredStudents.length === 0 && (
                   <tr>
-                    <td colSpan="3" className="px-4 py-14 text-center">
+                    <td colSpan="4" className="px-4 py-14 text-center">
                       <CardTitle className="text-base">
                         {students.length ? 'No matching students' : 'No students available'}
                       </CardTitle>
