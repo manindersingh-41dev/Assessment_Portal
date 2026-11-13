@@ -6,8 +6,11 @@ password reset, and profile management.
 """
 
 import logging
+from datetime import timedelta
 
+from django.core.exceptions import ValidationError
 from django.core import signing
+from django.core.validators import validate_email
 from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
@@ -18,7 +21,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
-from .models import User, StudentProfile, FacultyProfile
+from .models import User, StudentProfile, FacultyProfile, LoginAttempt
 from .serializers import (
     StudentRegistrationSerializer,
     FacultyRegistrationSerializer,
@@ -78,6 +81,49 @@ class StudentDirectoryView(APIView):
             role=User.ROLE_STUDENT, is_active=True
         ).order_by("last_name", "first_name", "email")
         return Response(StudentDirectorySerializer(students, many=True).data)
+
+
+class ClearStudentLoginLockView(APIView):
+    """Let approved faculty clear a student's active login lockout."""
+
+    permission_classes = [IsApprovedFaculty]
+
+    def post(self, request, student_id):
+        try:
+            student = User.objects.get(
+                pk=student_id,
+                role=User.ROLE_STUDENT,
+            )
+        except User.DoesNotExist:
+            return Response(
+                {"detail": "Student not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        cutoff = timezone.now() - timedelta(
+            minutes=AuthenticationService.LOGIN_ATTEMPT_WINDOW
+        )
+        recent_failures = LoginAttempt.objects.filter(
+            email__iexact=student.email,
+            success=False,
+            attempted_at__gte=cutoff,
+        )
+        cleared_attempts = recent_failures.count()
+        recent_failures.delete()
+
+        logger.info(
+            "Faculty user %s cleared %s recent failed login attempts for student %s",
+            request.user.pk,
+            cleared_attempts,
+            student.pk,
+        )
+        return Response(
+            {
+                "detail": "Student login lock cleared.",
+                "cleared_attempts": cleared_attempts,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class RegisterStudentView(viewsets.ViewSet):
@@ -546,13 +592,24 @@ class LoginView(viewsets.ViewSet):
             email = request.data.get('email')
             ip_address = self._get_client_ip(request)
 
-            if email:
-                # Record failed login attempt
-                AuthenticationService.record_login_attempt(
-                    email,
-                    ip_address,
-                    success=False
-                )
+            if isinstance(email, str) and email.strip():
+                # Match the normalized email used by LoginSerializer so
+                # casing or surrounding spaces cannot split the attempt count.
+                email = email.strip().lower()
+                try:
+                    validate_email(email)
+                except ValidationError:
+                    pass
+                else:
+                    # Failed requests made while blocked must not become new
+                    # failures: the lockout expires when the first failure in
+                    # the active 15-minute window ages out.
+                    if not LoginAttempt.is_brute_force(email):
+                        AuthenticationService.record_login_attempt(
+                            email,
+                            ip_address,
+                            success=False
+                        )
 
             return Response(serializer.errors, status=status.HTTP_401_UNAUTHORIZED)
 

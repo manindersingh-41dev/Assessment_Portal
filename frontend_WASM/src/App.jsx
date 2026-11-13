@@ -32,6 +32,7 @@ import AssessmentDetailsPage from './pages/faculty/AssessmentDetailsPage.jsx';
 import CreateAssessmentPage from './pages/faculty/CreateAssessmentPage.jsx';
 import AssessmentEditPage from './pages/faculty/AssessmentEditPage.jsx';
 import ResultsPage from './pages/faculty/ResultsPage.jsx';
+import StudentAccessPage from './pages/faculty/StudentAccessPage.jsx';
 import FacultyProfilePage from './pages/faculty/FacultyProfilePage.jsx';
 import NotFoundPage from './pages/NotFoundPage.jsx';
 
@@ -84,6 +85,7 @@ export function App() {
               <Route path="/faculty/assessments/:id" element={<AssessmentDetailsPage />} />
               <Route path="/faculty/assessments/:id/edit" element={<AssessmentEditPage />} />
               <Route path="/faculty/results" element={<ResultsPage />} />
+              <Route path="/faculty/students" element={<StudentAccessPage />} />
               <Route path="/faculty/profile" element={<FacultyProfilePage />} />
             </Route>
           </Route>

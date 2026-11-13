@@ -10,6 +10,7 @@ import {
   Code2,
   GraduationCap,
   LayoutDashboard,
+  Users,
   UserRound,
   X,
 } from 'lucide-react';
@@ -31,6 +32,7 @@ const facultyNavigation = [
   { label: 'Question bank', icon: BookOpen, path: '/faculty/questions' },
   { label: 'Assessments', icon: ClipboardCheck, path: '/faculty/assessments' },
   { label: 'Results', icon: BarChart3, path: '/faculty/results' },
+  { label: 'Students', icon: Users, path: '/faculty/students' },
   { label: 'Profile', icon: UserRound, path: '/faculty/profile' },
 ];
 

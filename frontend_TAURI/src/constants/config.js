@@ -91,6 +91,7 @@ export const config = {
       // User directory
       users: {
         studentsList: '/users/?role=student',
+        clearLoginLock: (studentId) => `/users/${studentId}/login-lock/`,
       },
     },
   },

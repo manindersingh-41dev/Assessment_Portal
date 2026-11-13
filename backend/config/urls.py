@@ -20,7 +20,7 @@ from rest_framework_simplejwt.views import (
     TokenRefreshView,
     TokenVerifyView,
 )
-from users.views import StudentDirectoryView
+from users.views import ClearStudentLoginLockView, StudentDirectoryView
 
 admin.site.site_header = "Geeta University Administration"
 admin.site.site_title = "Geeta Assessment Portal"
@@ -37,6 +37,11 @@ urlpatterns = [
     # App endpoints
     path("api/auth/", include("users.urls")),
     path("api/users/", StudentDirectoryView.as_view(), name="student-directory"),
+    path(
+        "api/users/<uuid:student_id>/login-lock/",
+        ClearStudentLoginLockView.as_view(),
+        name="clear-student-login-lock",
+    ),
     path("api/questions/", include("questions.urls")),
     path("api/assessments/", include("assessments.urls")),
     path("api/submissions/", include("submissions.urls")),
