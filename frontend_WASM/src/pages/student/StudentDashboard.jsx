@@ -26,11 +26,12 @@ const asList = (data) => {
 const assessmentCategory = (assessment, now) => {
   const assignmentStatus = assessment.assignment?.status;
   if (['submitted', 'graded', 'expired'].includes(assignmentStatus)) return 'completed';
-  if (assignmentStatus === 'started' && assessment.is_timed === false) return 'active';
   const start = new Date(assessment.start_time).getTime();
-  const end = new Date(assessment.end_time).getTime();
   if (Number.isFinite(start) && now < start) return 'upcoming';
-  if (Number.isFinite(end) && now > end) return 'completed';
+  const deadlines = [assessment.end_time, assessment.assignment?.due_at]
+    .map((value) => new Date(value).getTime())
+    .filter(Number.isFinite);
+  if (deadlines.length && now > Math.min(...deadlines)) return 'completed';
   return 'active';
 };
 

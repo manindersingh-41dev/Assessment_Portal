@@ -111,13 +111,8 @@ class AssessmentAssignment(UUIDModel, TimeStampedModel, CreatedByModel):
         return f"{self.student.email} <- {self.assessment.title}"
 
     def effective_deadline(self):
-        """Return the effective start or completion deadline, if one applies."""
-        deadlines = []
-
-        # The schedule limits when a student may start. Once an untimed
-        # assessment has started, its schedule end no longer limits completion.
-        if not self.started_at or self.assessment.is_timed:
-            deadlines.append(self.assessment.end_time)
+        """Return the earliest scheduled, personal, or timed-attempt deadline."""
+        deadlines = [self.assessment.end_time]
         if self.due_at:
             deadlines.append(self.due_at)
         if self.started_at and self.assessment.is_timed:

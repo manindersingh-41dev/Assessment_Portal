@@ -106,15 +106,15 @@ const getQuestionLinks = (assessment) => {
 };
 
 const effectiveDeadline = (assessment, assignment) => {
-  const deadlines = [];
+  const deadlines = [new Date(assessment.end_time).getTime()];
   if (assessment.is_timed !== false) {
-    deadlines.push(new Date(assessment.end_time).getTime());
     deadlines.push(
       new Date(assignment.started_at).getTime() + Number(assessment.duration_minutes || 0) * 60_000,
     );
   }
   if (assignment.due_at) deadlines.push(new Date(assignment.due_at).getTime());
-  return deadlines.length ? Math.min(...deadlines) : Infinity;
+  const validDeadlines = deadlines.filter(Number.isFinite);
+  return validDeadlines.length ? Math.min(...validDeadlines) : Infinity;
 };
 
 const localDraftStorageKey = (assignmentId) => `assessment-drafts:${assignmentId}`;
@@ -612,6 +612,11 @@ const AssessmentAttemptPage = () => {
           throw new Error('The server did not record the assessment start time. Please reopen the assessment.');
         }
 
+        const attemptDeadline = effectiveDeadline(currentAssessment, activeAssignment);
+        if (Number.isFinite(attemptDeadline) && Date.now() > attemptDeadline) {
+          throw new Error('This assessment has closed. Return to your assessment list to review its status.');
+        }
+
         const codeMap = Object.fromEntries(questionRows.map((question) => [question.id, DEFAULT_CODE]));
         const startDeadline = activeAssignment.started_at
           ? effectiveDeadline(currentAssessment, activeAssignment)
@@ -844,11 +849,15 @@ const AssessmentAttemptPage = () => {
       setRemainingSeconds(next);
       if (next === 0 && !autoSubmitTriggeredRef.current && !questionSubmitLocksRef.current.size && !submitLockRef.current) {
         autoSubmitTriggeredRef.current = true;
-        performFinalSubmit(true);
+        if (assessment?.is_timed === false) {
+          void flushDrafts().finally(() => navigate('/student/dashboard', { replace: true }));
+        } else {
+          performFinalSubmit(true);
+        }
       }
     }, 1000);
     return () => window.clearInterval(interval);
-  }, [deadlineAt, finalized, performFinalSubmit]);
+  }, [assessment?.is_timed, deadlineAt, finalized, flushDrafts, navigate, performFinalSubmit]);
 
   useEffect(() => {
     const ids = Object.entries(submissionIds);

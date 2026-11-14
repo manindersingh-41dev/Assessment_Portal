@@ -117,11 +117,12 @@ const StudentAssessmentDetailsPage = () => {
   }
 
   const start = new Date(assessment.start_time).getTime();
-  const end = new Date(assessment.end_time).getTime();
   const isSubmitted = completedAssignmentStates.includes(assignment?.status);
-  const canResumeUntimed = assignment?.status === 'started' && assessment.is_timed === false;
   const isUpcoming = Number.isFinite(start) && now < start;
-  const isPastEnd = Number.isFinite(end) && now > end && !canResumeUntimed;
+  const deadlines = [assessment.end_time, assignment?.due_at]
+    .map((value) => new Date(value).getTime())
+    .filter(Number.isFinite);
+  const isPastEnd = deadlines.length > 0 && now > Math.min(...deadlines);
   const isActive = !isSubmitted && !isUpcoming && !isPastEnd;
   const status = isSubmitted || isPastEnd ? 'Completed' : isUpcoming ? 'Upcoming' : 'Active';
   const statusVariant = status === 'Active' ? 'success' : status === 'Upcoming' ? 'info' : 'neutral';
@@ -189,7 +190,7 @@ const StudentAssessmentDetailsPage = () => {
 
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 p-5 sm:px-8 dark:border-slate-800">
           <p className="text-xs text-slate-500">
-            {isSubmitted ? 'Your submission has been recorded.' : isUpcoming ? `This assessment opens ${dateLabel(assessment.start_time)}.` : canResumeUntimed ? 'The scheduled window has closed, but you can resume your untimed attempt.' : isPastEnd ? 'The assessment window has closed.' : 'You can start while the assessment window is open.'}
+            {isSubmitted ? 'Your submission has been recorded.' : isUpcoming ? `This assessment opens ${dateLabel(assessment.start_time)}.` : isPastEnd ? 'The assessment window has closed.' : 'You can start while the assessment window is open.'}
           </p>
           <Button size="lg" disabled={!isActive || (!assignment && !childrenDay)} onClick={() => navigate(childrenDay ? '/childrens-day' : `/assessment/${assessment.id}`)}>
             <Play size={16} />{isSubmitted ? 'Submitted' : isUpcoming ? 'Not open yet' : isPastEnd ? 'Assessment closed' : startAction}
