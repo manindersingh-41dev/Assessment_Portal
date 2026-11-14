@@ -23,7 +23,6 @@ import StudentSubmissionsPage from './pages/student/StudentSubmissionsPage.jsx';
 import StudentResultsPage from './pages/student/StudentResultsPage.jsx';
 import StudentAssessmentDetailsPage from './pages/student/StudentAssessmentDetailsPage.jsx';
 import AssessmentAttemptPage from './pages/student/AssessmentAttemptPage.jsx';
-import ChildrenDayPage from './pages/student/ChildrenDayPage.jsx';
 
 import FacultyDashboard from './pages/faculty/FacultyDashboard.jsx';
 import QuestionBankPage from './pages/faculty/QuestionBankPage.jsx';
@@ -58,7 +57,6 @@ export function App() {
           </Route>
 
           <Route element={<ProtectedRoute requiredRole="student"><StudentPortalProtection /></ProtectedRoute>}>
-            <Route path="/childrens-day" element={<ChildrenDayPage />} />
             <Route element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
               <Route path="/dashboard" element={<StudentDashboard />} />
               <Route path="/student/dashboard" element={<StudentDashboard />} />

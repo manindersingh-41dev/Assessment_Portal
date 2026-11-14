@@ -1,11 +1,7 @@
-import React, { useEffect, useState } from 'react';
-import { Navigate, Outlet, useLocation } from 'react-router-dom';
-import { isChildrenDay } from '../utils/isChildrenDay.js';
+import React, { useEffect } from 'react';
+import { Outlet } from 'react-router-dom';
 
 const StudentPortalProtection = () => {
-  const location = useLocation();
-  const [childrenDay, setChildrenDay] = useState(() => isChildrenDay());
-
   useEffect(() => {
     const preventContextMenu = (event) => event.preventDefault();
     const blockDeveloperToolsShortcuts = (event) => {
@@ -26,17 +22,11 @@ const StudentPortalProtection = () => {
 
     document.addEventListener('contextmenu', preventContextMenu, true);
     document.addEventListener('keydown', blockDeveloperToolsShortcuts, true);
-    const dayCheck = window.setInterval(() => setChildrenDay(isChildrenDay()), 30_000);
     return () => {
       document.removeEventListener('contextmenu', preventContextMenu, true);
       document.removeEventListener('keydown', blockDeveloperToolsShortcuts, true);
-      window.clearInterval(dayCheck);
     };
   }, []);
-
-  if (childrenDay && location.pathname.startsWith('/assessment/')) {
-    return <Navigate to="/childrens-day" replace />;
-  }
 
   return <Outlet />;
 };

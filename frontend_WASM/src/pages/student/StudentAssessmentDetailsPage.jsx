@@ -6,7 +6,6 @@ import { Alert, Badge, Card } from '../../components/Common';
 import { useNotificationStore } from '../../store/notificationStore';
 import api from '../../api/client';
 import { config } from '../../constants/config';
-import { isChildrenDay } from '../../utils/isChildrenDay.js';
 import { formatIndiaDateTime, parseIndiaDateTime } from '../../utils/indiaDateTime.js';
 
 const endpoints = config.api.endpoints;
@@ -130,7 +129,6 @@ const StudentAssessmentDetailsPage = () => {
     ?? assessment.questions?.length
     ?? 0;
   const startAction = assignment?.status === 'started' ? 'Continue assessment' : 'Start assessment';
-  const childrenDay = isChildrenDay();
 
   return (
     <div className="mx-auto max-w-5xl space-y-5 p-4 sm:p-6">
@@ -191,7 +189,7 @@ const StudentAssessmentDetailsPage = () => {
           <p className="text-xs text-slate-500">
             {isSubmitted ? 'Your submission has been recorded.' : isUpcoming ? `This assessment opens ${dateLabel(assessment.start_time)}.` : isPastEnd ? 'The assessment window has closed.' : 'You can start while the assessment window is open.'}
           </p>
-          <Button size="lg" disabled={!isActive || (!assignment && !childrenDay)} onClick={() => navigate(childrenDay ? '/childrens-day' : `/assessment/${assessment.id}`)}>
+          <Button size="lg" disabled={!isActive || !assignment} onClick={() => navigate(`/assessment/${assessment.id}`)}>
             <Play size={16} />{isSubmitted ? 'Submitted' : isUpcoming ? 'Not open yet' : isPastEnd ? 'Assessment closed' : startAction}
           </Button>
         </div>

@@ -7,7 +7,6 @@ import { useNotificationStore } from '../../store/notificationStore';
 import { useAuthStore } from '../../store/authStore';
 import api from '../../api/client';
 import { config } from '../../constants/config';
-import { isChildrenDay } from '../../utils/isChildrenDay.js';
 import { formatIndiaDateTime, parseIndiaDateTime } from '../../utils/indiaDateTime.js';
 
 const endpoints = config.api.endpoints;
@@ -206,8 +205,7 @@ const StudentDashboard = ({ filter = 'all' }) => {
     : categorized[filter] || [];
 
   const openAssessment = (assessment, category) => {
-    if (category === 'active' && isChildrenDay()) navigate('/childrens-day');
-    else if (category === 'active') navigate(`/assessment/${assessment.id}`);
+    if (category === 'active') navigate(`/assessment/${assessment.id}`);
     else navigate(`/student/assessments/${assessment.id}`);
   };
 
