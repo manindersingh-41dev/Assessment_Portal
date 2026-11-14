@@ -21,6 +21,7 @@ import { useAuthStore } from '../../store/authStore';
 import { useNotificationStore } from '../../store/notificationStore';
 import api from '../../api/client';
 import { config } from '../../constants/config';
+import { parseIndiaDateTime } from '../../utils/indiaDateTime.js';
 import { createRunner, getRunnerProfile, supportsRunner } from '../../runner';
 
 const endpoints = config.api.endpoints;
@@ -106,13 +107,13 @@ const getQuestionLinks = (assessment) => {
 };
 
 const effectiveDeadline = (assessment, assignment) => {
-  const deadlines = [new Date(assessment.end_time).getTime()];
+  const deadlines = [parseIndiaDateTime(assessment.end_time)];
   if (assessment.is_timed !== false) {
     deadlines.push(
-      new Date(assignment.started_at).getTime() + Number(assessment.duration_minutes || 0) * 60_000,
+      parseIndiaDateTime(assignment.started_at) + Number(assessment.duration_minutes || 0) * 60_000,
     );
   }
-  if (assignment.due_at) deadlines.push(new Date(assignment.due_at).getTime());
+  if (assignment.due_at) deadlines.push(parseIndiaDateTime(assignment.due_at));
   const validDeadlines = deadlines.filter(Number.isFinite);
   return validDeadlines.length ? Math.min(...validDeadlines) : Infinity;
 };

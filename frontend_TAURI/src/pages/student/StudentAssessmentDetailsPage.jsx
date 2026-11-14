@@ -7,6 +7,7 @@ import { useNotificationStore } from '../../store/notificationStore';
 import api from '../../api/client';
 import { config } from '../../constants/config';
 import { isChildrenDay } from '../../utils/isChildrenDay.js';
+import { formatIndiaDateTime, parseIndiaDateTime } from '../../utils/indiaDateTime.js';
 
 const endpoints = config.api.endpoints;
 const completedAssignmentStates = ['submitted', 'graded', 'expired'];
@@ -18,9 +19,7 @@ const asList = (data) => {
 };
 
 const dateLabel = (value) => {
-  if (!value) return 'Not scheduled';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? 'Not scheduled' : date.toLocaleString();
+  return formatIndiaDateTime(value);
 };
 
 const StudentAssessmentDetailsPage = () => {
@@ -94,7 +93,7 @@ const StudentAssessmentDetailsPage = () => {
   useEffect(() => {
     const updateNow = () => setNow(Date.now());
     const firstUpdate = window.setTimeout(updateNow, 0);
-    const interval = window.setInterval(updateNow, 60_000);
+    const interval = window.setInterval(updateNow, 5_000);
     return () => {
       window.clearTimeout(firstUpdate);
       window.clearInterval(interval);
@@ -116,11 +115,11 @@ const StudentAssessmentDetailsPage = () => {
     );
   }
 
-  const start = new Date(assessment.start_time).getTime();
+  const start = parseIndiaDateTime(assessment.start_time);
   const isSubmitted = completedAssignmentStates.includes(assignment?.status);
   const isUpcoming = Number.isFinite(start) && now < start;
   const deadlines = [assessment.end_time, assignment?.due_at]
-    .map((value) => new Date(value).getTime())
+    .map(parseIndiaDateTime)
     .filter(Number.isFinite);
   const isPastEnd = deadlines.length > 0 && now > Math.min(...deadlines);
   const isActive = !isSubmitted && !isUpcoming && !isPastEnd;

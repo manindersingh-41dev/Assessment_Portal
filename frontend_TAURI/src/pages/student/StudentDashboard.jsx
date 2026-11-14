@@ -8,6 +8,7 @@ import { useAuthStore } from '../../store/authStore';
 import api from '../../api/client';
 import { config } from '../../constants/config';
 import { isChildrenDay } from '../../utils/isChildrenDay.js';
+import { formatIndiaDateTime, parseIndiaDateTime } from '../../utils/indiaDateTime.js';
 
 const endpoints = config.api.endpoints;
 const tabs = [
@@ -26,19 +27,17 @@ const asList = (data) => {
 const assessmentCategory = (assessment, now) => {
   const assignmentStatus = assessment.assignment?.status;
   if (['submitted', 'graded', 'expired'].includes(assignmentStatus)) return 'completed';
-  const start = new Date(assessment.start_time).getTime();
+  const start = parseIndiaDateTime(assessment.start_time);
   if (Number.isFinite(start) && now < start) return 'upcoming';
   const deadlines = [assessment.end_time, assessment.assignment?.due_at]
-    .map((value) => new Date(value).getTime())
+    .map(parseIndiaDateTime)
     .filter(Number.isFinite);
   if (deadlines.length && now > Math.min(...deadlines)) return 'completed';
   return 'active';
 };
 
 const dateLabel = (value) => {
-  if (!value) return 'Not scheduled';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? 'Not scheduled' : date.toLocaleString();
+  return formatIndiaDateTime(value);
 };
 
 const statusVariant = (category) => ({ active: 'success', upcoming: 'info', completed: 'neutral' }[category] || 'neutral');
@@ -189,7 +188,7 @@ const StudentDashboard = ({ filter = 'all' }) => {
   useEffect(() => {
     const updateNow = () => setNow(Date.now());
     const firstUpdate = window.setTimeout(updateNow, 0);
-    const interval = window.setInterval(updateNow, 60_000);
+    const interval = window.setInterval(updateNow, 5_000);
     return () => {
       window.clearTimeout(firstUpdate);
       window.clearInterval(interval);
