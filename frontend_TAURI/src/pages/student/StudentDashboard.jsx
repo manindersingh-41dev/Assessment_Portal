@@ -7,6 +7,7 @@ import { useNotificationStore } from '../../store/notificationStore';
 import { useAuthStore } from '../../store/authStore';
 import api from '../../api/client';
 import { config } from '../../constants/config';
+import { isChildrenDay } from '../../utils/isChildrenDay.js';
 
 const endpoints = config.api.endpoints;
 const tabs = [
@@ -41,8 +42,10 @@ const dateLabel = (value) => {
 
 const statusVariant = (category) => ({ active: 'success', upcoming: 'info', completed: 'neutral' }[category] || 'neutral');
 
-const AssessmentCard = ({ assessment, category, onOpen }) => {
-  const actionText = category === 'active'
+const AssessmentCard = ({ assessment, category, onOpen, childrenDay }) => {
+  const actionText = childrenDay && category === 'active'
+    ? 'Children’s Day page'
+    : category === 'active'
     ? assessment.assignment?.status === 'started' ? 'Continue assessment' : 'Start assessment'
     : category === 'upcoming' ? 'View details' : 'Review details';
 
@@ -205,14 +208,15 @@ const StudentDashboard = ({ filter = 'all' }) => {
     : categorized[filter] || [];
 
   const openAssessment = (assessment, category) => {
-    if (category === 'active') navigate(`/assessment/${assessment.id}`);
+    if (category === 'active' && isChildrenDay()) navigate('/childrens-day');
+    else if (category === 'active') navigate(`/assessment/${assessment.id}`);
     else navigate(`/student/assessments/${assessment.id}`);
   };
 
   const renderCards = (items, category, limit = Infinity) => (
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
       {items.slice(0, limit).map((assessment) => (
-        <AssessmentCard key={assessment.id} assessment={assessment} category={category}
+        <AssessmentCard key={assessment.id} assessment={assessment} category={category} childrenDay={isChildrenDay()}
           onOpen={() => openAssessment(assessment, category)} />
       ))}
       {items.length === 0 && (
