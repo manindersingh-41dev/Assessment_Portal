@@ -22,6 +22,22 @@ const asList = (data) => {
 
 const unwrapAssessment = (data) => data?.assessment || data;
 
+const loadQuestionBankPages = async () => {
+  let url = endpoints.questions.list;
+  const allQuestions = [];
+  const visitedPages = new Set();
+
+  while (url && !visitedPages.has(url)) {
+    visitedPages.add(url);
+    const response = await api.get(url);
+    const payload = response.data;
+    allQuestions.push(...asList(payload));
+    url = Array.isArray(payload) ? null : payload?.next || null;
+  }
+
+  return allQuestions;
+};
+
 const toDateTimeInput = (value) => {
   if (!value) return '';
   const date = new Date(value);
@@ -117,14 +133,17 @@ const CreateAssessmentWizard = ({ isEdit = false, assessmentId = null }) => {
         ? Promise.resolve(null)
         : api.get(endpoints.auth.facultyProfile);
       const [questionsResult, studentsResult, preferenceResult] = await Promise.allSettled([
-        api.get(endpoints.questions.list),
+        loadQuestionBankPages(),
         api.get(endpoints.users.studentsList),
         preferenceRequest,
       ]);
 
       if (!active) return;
+      const loadedQuestionBank = questionsResult.status === 'fulfilled'
+        ? asList(questionsResult.value)
+        : [];
       if (questionsResult.status === 'fulfilled') {
-        setQuestionBank(asList(questionsResult.value.data));
+        setQuestionBank(loadedQuestionBank);
       } else {
         addNotification('Could not load your question bank.', 'error');
       }
@@ -161,7 +180,10 @@ const CreateAssessmentWizard = ({ isEdit = false, assessmentId = null }) => {
             is_open_to_all_students: current.is_open_to_all_students !== false,
             start_time: toDateTimeInput(current.start_time || current.start_datetime),
             end_time: toDateTimeInput(current.end_time || current.end_datetime),
-            selected_questions: getAssessmentQuestions(current),
+            selected_questions: getAssessmentQuestions(current).map((question) => ({
+              ...loadedQuestionBank.find((bankQuestion) => String(bankQuestion.id) === String(question.id)),
+              ...question,
+            })),
           });
 
           try {
@@ -246,6 +268,28 @@ const CreateAssessmentWizard = ({ isEdit = false, assessmentId = null }) => {
     setQuestionDifficulty('all');
     addNotification(
       `${createdQuestions.length} questions and their test cases were added to the question bank and this assessment.`,
+      'success',
+    );
+  };
+
+  const handleExistingQuestionsAdded = (existingQuestions) => {
+    setFormData((current) => {
+      const selectedIds = new Set(current.selected_questions.map((question) => String(question.id)));
+      const additions = existingQuestions
+        .filter((question) => !selectedIds.has(String(question.id)))
+        .map((question) => ({
+          ...question,
+          marks: Number(question.total_marks || question.marks || 10),
+        }));
+
+      return additions.length
+        ? { ...current, selected_questions: [...current.selected_questions, ...additions] }
+        : current;
+    });
+    setQuestionSearch('');
+    setQuestionDifficulty('all');
+    addNotification(
+      `${existingQuestions.length} existing question${existingQuestions.length === 1 ? '' : 's'} added to this assessment.`,
       'success',
     );
   };
@@ -487,6 +531,11 @@ const CreateAssessmentWizard = ({ isEdit = false, assessmentId = null }) => {
                           <p className="mt-1 text-xs capitalize text-slate-500">
                             {question.difficulty || 'medium'} · {question.total_marks || question.marks || 10} marks
                           </p>
+                          <p className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">
+                            {question.latest_assessment?.title
+                              ? `Latest assessment: ${question.latest_assessment.title}`
+                              : 'Not used in an assessment yet'}
+                          </p>
                         </div>
                         <Button size="sm" variant={selected ? 'secondary' : 'primary'} disabled={selected}
                           onClick={() => addQuestion(question)}>
@@ -512,6 +561,11 @@ const CreateAssessmentWizard = ({ isEdit = false, assessmentId = null }) => {
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-medium text-slate-900 dark:text-white">{question.title}</p>
                         <p className="mt-1 text-xs capitalize text-slate-500">{question.difficulty}</p>
+                        <p className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">
+                          {question.latest_assessment?.title
+                            ? `Latest assessment: ${question.latest_assessment.title}`
+                            : 'Not used in an assessment yet'}
+                        </p>
                       </div>
                       <label className="flex items-center gap-1 text-xs text-slate-500">
                         <span className="sr-only">Marks for {question.title}</span>
@@ -726,6 +780,9 @@ const CreateAssessmentWizard = ({ isEdit = false, assessmentId = null }) => {
         isOpen={bulkImportOpen}
         onClose={() => setBulkImportOpen(false)}
         onImported={handleBulkQuestionsImported}
+        onAddExisting={handleExistingQuestionsAdded}
+        questionBank={questionBank}
+        selectedQuestionIds={formData.selected_questions.map((question) => question.id)}
       />
     </div>
   );

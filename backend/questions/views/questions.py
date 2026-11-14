@@ -10,7 +10,9 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from django.db.models import OuterRef, Subquery
 
+from assessments.models import AssessmentQuestion
 from questions.models import Question
 from questions.permissions import IsFacultyOrReadOnly, IsQuestionOwner
 from questions.serializers import (
@@ -31,6 +33,17 @@ def question_list_create(request):
         # Faculty manage only their own questions; students only see active ones.
         if request.user.is_faculty():
             queryset = queryset.filter(created_by=request.user)
+            latest_usage = AssessmentQuestion.objects.filter(
+                question_id=OuterRef("pk"),
+            ).order_by(
+                "-assessment__start_time",
+                "-assessment__created_at",
+                "-created_at",
+            )
+            queryset = queryset.annotate(
+                latest_assessment_id=Subquery(latest_usage.values("assessment_id")[:1]),
+                latest_assessment_title=Subquery(latest_usage.values("assessment__title")[:1]),
+            )
         else:
             queryset = queryset.filter(status=Question.Status.ACTIVE)
 

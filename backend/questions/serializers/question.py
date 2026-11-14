@@ -186,6 +186,7 @@ class QuestionSerializer(serializers.ModelSerializer):
     created_by_email = serializers.EmailField(source="created_by.email", read_only=True)
     test_cases = serializers.SerializerMethodField()
     has_submissions = serializers.SerializerMethodField()
+    latest_assessment = serializers.SerializerMethodField()
 
     class Meta:
         model = Question
@@ -211,6 +212,7 @@ class QuestionSerializer(serializers.ModelSerializer):
             "created_by_email",
             "test_cases",
             "has_submissions",
+            "latest_assessment",
             "created_at",
             "updated_at",
         ]
@@ -227,6 +229,13 @@ class QuestionSerializer(serializers.ModelSerializer):
 
     def get_has_submissions(self, obj):
         return question_has_submissions(obj)
+
+    def get_latest_assessment(self, obj):
+        assessment_id = getattr(obj, "latest_assessment_id", None)
+        assessment_title = getattr(obj, "latest_assessment_title", None)
+        if not assessment_id or not assessment_title:
+            return None
+        return {"id": str(assessment_id), "title": assessment_title}
 
 
 class QuestionCreateUpdateSerializer(serializers.ModelSerializer):

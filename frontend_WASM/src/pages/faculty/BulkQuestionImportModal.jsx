@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Download, FileJson, Upload } from 'lucide-react';
+import { Download, FileJson, Plus, Upload } from 'lucide-react';
 import { Alert, CardDescription } from '../../components/Common';
 import { Button } from '../../components/Button';
 import { Modal } from '../../components/Modal';
@@ -65,7 +65,20 @@ const flattenErrors = (value, path = '') => {
   return [];
 };
 
-const BulkQuestionImportModal = ({ isOpen, onClose, onImported }) => {
+const fingerprintFields = ['title', 'description', 'input_format', 'output_format', 'constraints'];
+const normalizeQuestionText = (value) => String(value || '').split(/\s+/).filter(Boolean).join(' ').toLowerCase();
+const questionFingerprint = (question) => JSON.stringify(
+  fingerprintFields.map((field) => normalizeQuestionText(question[field])),
+);
+
+const BulkQuestionImportModal = ({
+  isOpen,
+  onClose,
+  onImported,
+  onAddExisting,
+  questionBank = [],
+  selectedQuestionIds = [],
+}) => {
   const [questions, setQuestions] = useState([]);
   const [fileName, setFileName] = useState('');
   const [error, setError] = useState('');
@@ -75,6 +88,28 @@ const BulkQuestionImportModal = ({ isOpen, onClose, onImported }) => {
     () => questions.reduce((total, question) => total + (Array.isArray(question.test_cases) ? question.test_cases.length : 0), 0),
     [questions],
   );
+  const bankQuestionsByFingerprint = useMemo(() => new Map(
+    questionBank.map((question) => [questionFingerprint(question), question]),
+  ), [questionBank]);
+  const matchedImportRows = useMemo(() => questions.map((question, index) => ({
+    question,
+    index,
+    existing: bankQuestionsByFingerprint.get(questionFingerprint(question)),
+  })).filter((item) => item.existing), [bankQuestionsByFingerprint, questions]);
+  const selectedIds = useMemo(
+    () => new Set(selectedQuestionIds.map(String)),
+    [selectedQuestionIds],
+  );
+  const existingQuestionsToAdd = useMemo(() => {
+    const uniqueMatches = new Map();
+    matchedImportRows.forEach(({ existing }) => {
+      if (!selectedIds.has(String(existing.id))) uniqueMatches.set(String(existing.id), existing);
+    });
+    return [...uniqueMatches.values()];
+  }, [matchedImportRows, selectedIds]);
+  const questionsToImport = useMemo(() => questions.filter(
+    (question) => !bankQuestionsByFingerprint.has(questionFingerprint(question)),
+  ), [bankQuestionsByFingerprint, questions]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -127,17 +162,17 @@ const BulkQuestionImportModal = ({ isOpen, onClose, onImported }) => {
   };
 
   const importQuestions = async () => {
-    if (!questions.length || loading) return;
+    if (!questionsToImport.length || loading) return;
     setLoading(true);
     setError('');
     try {
-      const response = await api.post(config.api.endpoints.questions.bulkCreate, { questions });
+      const response = await api.post(config.api.endpoints.questions.bulkCreate, { questions: questionsToImport });
       const createdQuestions = response.data?.questions;
-      if (!Array.isArray(createdQuestions) || createdQuestions.length !== questions.length) {
+      if (!Array.isArray(createdQuestions) || createdQuestions.length !== questionsToImport.length) {
         throw new Error('The server did not confirm that every question was created.');
       }
       onImported(createdQuestions);
-      onClose();
+      if (!existingQuestionsToAdd.length) onClose();
     } catch (importError) {
       const details = flattenErrors(importError?.response?.data);
       setError(details.length
@@ -157,9 +192,19 @@ const BulkQuestionImportModal = ({ isOpen, onClose, onImported }) => {
       footer={(
         <>
           <Button variant="secondary" disabled={loading} onClick={onClose}>Cancel</Button>
-          <Button icon={Upload} loading={loading} disabled={!questions.length} onClick={importQuestions}>
-            Import {questions.length || ''} questions
-          </Button>
+          {existingQuestionsToAdd.length > 0 && (
+            <Button icon={Plus} variant="success" disabled={loading} onClick={() => {
+              onAddExisting(existingQuestionsToAdd);
+              if (!questionsToImport.length) onClose();
+            }}>
+              Add {existingQuestionsToAdd.length} existing to assessment
+            </Button>
+          )}
+          {questionsToImport.length > 0 && (
+            <Button icon={Upload} loading={loading} disabled={loading} onClick={importQuestions}>
+              Import {questionsToImport.length} new question{questionsToImport.length === 1 ? '' : 's'}
+            </Button>
+          )}
         </>
       )}
     >
@@ -171,6 +216,13 @@ const BulkQuestionImportModal = ({ isOpen, onClose, onImported }) => {
         </div>
 
         {error && <Alert type="error" title="Import not completed"><pre className="max-h-40 overflow-auto whitespace-pre-wrap text-sm">{error}</pre></Alert>}
+
+        {matchedImportRows.length > 0 && (
+          <Alert type="info" title="Questions already in your bank">
+            {matchedImportRows.length} uploaded question{matchedImportRows.length === 1 ? ' matches' : 's match'} existing bank content. Add those to the assessment without creating duplicate bank entries.
+            {existingQuestionsToAdd.length === 0 && ' All matching questions are already selected in this assessment.'}
+          </Alert>
+        )}
 
         <div className="flex flex-wrap items-center gap-3">
           <label className="inline-flex min-h-10 cursor-pointer items-center gap-2 rounded-lg border border-slate-300 px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-100 dark:hover:bg-slate-800">
@@ -191,7 +243,10 @@ const BulkQuestionImportModal = ({ isOpen, onClose, onImported }) => {
               {questions.map((question, index) => (
                 <li key={`${question.title || 'question'}-${index}`} className="flex items-center justify-between gap-3 px-4 py-3 text-sm">
                   <span className="min-w-0 truncate font-medium text-slate-800 dark:text-slate-200">{question.title || `Question ${index + 1}`}</span>
-                  <span className="shrink-0 text-xs text-slate-500">
+                  <span className="flex shrink-0 items-center gap-2 text-xs text-slate-500">
+                    {bankQuestionsByFingerprint.has(questionFingerprint(question)) && (
+                      <span className="rounded-full bg-emerald-100 px-2 py-0.5 font-medium text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">Already in bank</span>
+                    )}
                     {Array.isArray(question.test_cases) ? question.test_cases.length : 0} test cases
                   </span>
                 </li>
