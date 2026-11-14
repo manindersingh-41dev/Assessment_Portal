@@ -192,7 +192,7 @@ const StudentAssessmentDetailsPage = () => {
             {isSubmitted ? 'Your submission has been recorded.' : isUpcoming ? `This assessment opens ${dateLabel(assessment.start_time)}.` : canResumeUntimed ? 'The scheduled window has closed, but you can resume your untimed attempt.' : isPastEnd ? 'The assessment window has closed.' : 'You can start while the assessment window is open.'}
           </p>
           <Button size="lg" disabled={!isActive || (!assignment && !childrenDay)} onClick={() => navigate(childrenDay ? '/childrens-day' : `/assessment/${assessment.id}`)}>
-            <Play size={16} />{isSubmitted ? 'Submitted' : isUpcoming ? 'Not open yet' : isPastEnd ? 'Assessment closed' : childrenDay ? 'Children’s Day page' : startAction}
+            <Play size={16} />{isSubmitted ? 'Submitted' : isUpcoming ? 'Not open yet' : isPastEnd ? 'Assessment closed' : startAction}
           </Button>
         </div>
       </Card>

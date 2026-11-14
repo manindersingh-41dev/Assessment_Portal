@@ -42,10 +42,8 @@ const dateLabel = (value) => {
 
 const statusVariant = (category) => ({ active: 'success', upcoming: 'info', completed: 'neutral' }[category] || 'neutral');
 
-const AssessmentCard = ({ assessment, category, onOpen, childrenDay }) => {
-  const actionText = childrenDay && category === 'active'
-    ? 'Children’s Day page'
-    : category === 'active'
+const AssessmentCard = ({ assessment, category, onOpen }) => {
+  const actionText = category === 'active'
     ? assessment.assignment?.status === 'started' ? 'Continue assessment' : 'Start assessment'
     : category === 'upcoming' ? 'View details' : 'Review details';
 
@@ -216,7 +214,7 @@ const StudentDashboard = ({ filter = 'all' }) => {
   const renderCards = (items, category, limit = Infinity) => (
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
       {items.slice(0, limit).map((assessment) => (
-        <AssessmentCard key={assessment.id} assessment={assessment} category={category} childrenDay={isChildrenDay()}
+        <AssessmentCard key={assessment.id} assessment={assessment} category={category}
           onOpen={() => openAssessment(assessment, category)} />
       ))}
       {items.length === 0 && (
