@@ -145,21 +145,8 @@ class AssessmentViewSet(viewsets.ModelViewSet):
         )
 
     def destroy(self, request, *args, **kwargs):
-        """Delete assessment (only draft)."""
+        """Delete an assessment owned by the requesting faculty member."""
         instance = self.get_object()
-
-        if instance.status != Assessment.Status.DRAFT:
-            return Response(
-                {'error': 'Only draft assessments can be deleted'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        if instance.assignments.exists():
-            return Response(
-                {'error': 'Cannot delete assessment with active assignments'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
         instance.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { CalendarClock, ClipboardList, Plus, Search, Users } from 'lucide-react';
+import { CalendarClock, ClipboardList, Plus, Search, Trash2, Users } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '../../components/Button';
 import { Input } from '../../components/Input';
@@ -36,6 +36,7 @@ const AssessmentsPage = () => {
   const [loadError, setLoadError] = useState('');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [deletingAssessmentId, setDeletingAssessmentId] = useState(null);
   const navigate = useNavigate();
   const addNotification = useNotificationStore((state) => state.addNotification);
 
@@ -76,6 +77,24 @@ const AssessmentsPage = () => {
   const retryFetchAssessments = () => {
     setLoading(true);
     fetchAssessments();
+  };
+
+  const deleteAssessment = async (assessment) => {
+    const confirmed = window.confirm(
+      `Delete “${assessment.title}”? This permanently removes the assessment and its assignments, submissions, and results.`
+    );
+    if (!confirmed) return;
+
+    setDeletingAssessmentId(assessment.id);
+    try {
+      await api.delete(endpoints.assessments.delete(assessment.id));
+      setAssessments((current) => current.filter((item) => item.id !== assessment.id));
+      addNotification('Assessment deleted.', 'success');
+    } catch (error) {
+      addNotification(error.response?.data?.error || error.response?.data?.detail || 'Could not delete this assessment.', 'error');
+    } finally {
+      setDeletingAssessmentId(null);
+    }
   };
 
   const filteredAssessments = useMemo(() => assessments.filter((assessment) => {
@@ -169,6 +188,15 @@ const AssessmentsPage = () => {
                       <div className="flex justify-end gap-2">
                         <Button variant="secondary" size="sm" onClick={() => navigate(`/faculty/assessments/${assessment.id}`)}>View</Button>
                         <Button variant="outline" size="sm" onClick={() => navigate(`/faculty/assessments/${assessment.id}/edit`)}>Edit</Button>
+                        <Button
+                          variant="danger"
+                          size="sm"
+                          icon={Trash2}
+                          loading={deletingAssessmentId === assessment.id}
+                          disabled={deletingAssessmentId !== null && deletingAssessmentId !== assessment.id}
+                          aria-label={`Delete ${assessment.title}`}
+                          onClick={() => deleteAssessment(assessment)}
+                        >Delete</Button>
                       </div>
                     </td>
                   </tr>
