@@ -484,6 +484,42 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
             ).data,
         })
 
+    @action(detail=True, methods=['post'], url_path='reopen')
+    def reopen(self, request, pk=None):
+        """Reopen a submitted assignment so the student can continue it."""
+        if request.user.role != 'faculty' or not request.user.is_faculty_approved:
+            return Response(
+                {'error': 'Only approved faculty can reopen an assessment.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        assignment = self.get_object()
+        if assignment.assessment.created_by_id != request.user.id:
+            return Response(
+                {'error': 'You can only reopen assignments for your assessments.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if assignment.status not in [
+            AssessmentAssignment.Status.SUBMITTED,
+            AssessmentAssignment.Status.GRADED,
+        ]:
+            return Response(
+                {'error': 'Only submitted assignments can be reopened.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        assignment.status = AssessmentAssignment.Status.STARTED
+        assignment.started_at = timezone.now()
+        assignment.submitted_at = None
+        assignment.save(update_fields=['status', 'started_at', 'submitted_at', 'updated_at'])
+        return Response({
+            'message': 'Assessment reopened for the student.',
+            'assignment': AssessmentAssignmentSerializer(
+                assignment,
+                context={'request': request},
+            ).data,
+        })
+
     @action(
         detail=True,
         methods=['post'],

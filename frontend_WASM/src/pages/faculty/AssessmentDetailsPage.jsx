@@ -131,6 +131,24 @@ const AssessmentDetailsPage = () => {
     }
   };
 
+  const reopenAssignment = async (assignmentId) => {
+    setUnlockingAssignmentId(assignmentId);
+    try {
+      const response = await api.post(endpoints.assessments.reopenAssignment(assignmentId));
+      const updatedAssignment = response.data?.assignment;
+      if (updatedAssignment) {
+        setAssignments((current) => current.map((item) => (
+          item.id === assignmentId ? { ...item, ...updatedAssignment } : item
+        )));
+      }
+      addNotification('Assessment reopened for the student.', 'success');
+    } catch (error) {
+      addNotification(error.response?.data?.error || 'Could not reopen this assessment.', 'error');
+    } finally {
+      setUnlockingAssignmentId(null);
+    }
+  };
+
   if (loading) return <div className="p-8 text-center text-sm text-slate-500">Loading assessment…</div>;
   if (loadError && !assessment) {
     return (
@@ -248,6 +266,17 @@ const AssessmentDetailsPage = () => {
                     <p className="mt-0.5 truncate text-xs text-slate-500">{assignment.student_email || assignment.student.email}</p>
                   )}
                   <div className="mt-2"><Badge variant={assignment.status === 'submitted' || assignment.status === 'graded' ? 'success' : 'neutral'}>{assignment.status || 'assigned'}</Badge></div>
+                  {(assignment.status === 'submitted' || assignment.status === 'graded') && (
+                    <Button
+                      className="mt-2"
+                      size="sm"
+                      variant="secondary"
+                      loading={unlockingAssignmentId === assignment.id}
+                      onClick={() => reopenAssignment(assignment.id)}
+                    >
+                      Reopen assessment
+                    </Button>
+                  )}
                   {assignment.is_flagged_cheating && (
                     <div className="mt-2 rounded-lg border border-rose-900/40 bg-rose-50 p-2 text-xs text-rose-800 dark:bg-rose-950/30 dark:text-rose-200">
                       <p className="font-semibold"><ShieldAlert size={14} className="mr-1 inline" />Cheating review flag</p>
