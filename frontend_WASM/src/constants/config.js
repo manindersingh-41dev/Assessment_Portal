@@ -51,6 +51,7 @@ export const config = {
         delete: (id) => `/assessments/assessments/${id}/`,
         publish: (id) => `/assessments/assessments/${id}/publish/`,
         archive: (id) => `/assessments/assessments/${id}/archive/`,
+        reopenWindow: (id) => `/assessments/assessments/${id}/reopen-window/`,
         assign: (id) => `/assessments/assessments/${id}/assign/`,
         assignments: (id) => `/assessments/assessments/${id}/assignments/`,
         myAssignments: '/assessments/assignments/',

@@ -5,6 +5,7 @@ Handles all assessment-related endpoints including creation, assignment, and stu
 """
 
 import math
+from datetime import timedelta
 
 from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
@@ -96,7 +97,7 @@ class AssessmentViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         """Set permissions based on action."""
-        if self.action in ['create', 'publish', 'archive']:
+        if self.action in ['create', 'publish', 'archive', 'reopen_window']:
             permission_classes = [IsApprovedFaculty]
         elif self.action in ['update', 'partial_update', 'destroy']:
             permission_classes = [IsAssessmentCreator]
@@ -196,6 +197,32 @@ class AssessmentViewSet(viewsets.ModelViewSet):
                 ).data
             }
         )
+
+    @action(detail=True, methods=['post'], url_path='reopen-window')
+    def reopen_window(self, request, pk=None):
+        """Extend an expired assessment window by 24 hours for pending students."""
+        assessment = self.get_object()
+        if assessment.end_datetime >= timezone.now():
+            return Response(
+                {'error': 'This assessment is still open.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        now = timezone.now()
+        new_end = now + timedelta(hours=24)
+        assessment.end_datetime = new_end
+        assessment.status = Assessment.Status.ACTIVE
+        assessment.save(update_fields=['end_datetime', 'status', 'updated_at'])
+        # Custom assignment deadlines must also move, otherwise they would
+        # continue blocking students despite the assessment window being open.
+        assessment.assignments.filter(
+            status__in=[AssessmentAssignment.Status.ASSIGNED, AssessmentAssignment.Status.STARTED],
+            deadline__isnull=False,
+        ).update(deadline=new_end, updated_at=now)
+        return Response({
+            'message': 'Assessment reopened for 24 hours.',
+            'end_datetime': new_end,
+        })
 
     @action(detail=True, methods=['post'])
     def assign(self, request, pk=None):

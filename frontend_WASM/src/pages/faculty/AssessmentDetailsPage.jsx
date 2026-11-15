@@ -28,6 +28,7 @@ const AssessmentDetailsPage = () => {
   const [assignments, setAssignments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [publishing, setPublishing] = useState(false);
+  const [reopeningWindow, setReopeningWindow] = useState(false);
   const [retryingNotificationId, setRetryingNotificationId] = useState(null);
   const [unlockingAssignmentId, setUnlockingAssignmentId] = useState(null);
   const [loadError, setLoadError] = useState('');
@@ -97,6 +98,22 @@ const AssessmentDetailsPage = () => {
       addNotification(error.response?.data?.detail || error.response?.data?.error || 'Could not publish the assessment.', 'error');
     } finally {
       setPublishing(false);
+    }
+  };
+
+  const handleReopenWindow = async () => {
+    if (!window.confirm('Reopen this assessment for 24 hours so pending students can finish and submit?')) return;
+    setReopeningWindow(true);
+    try {
+      const response = await api.post(endpoints.assessments.reopenWindow(id));
+      const newEnd = response.data?.end_datetime;
+      setAssessment((current) => ({ ...current, end_datetime: newEnd, end_time: newEnd, status: 'active' }));
+      addNotification('Assessment reopened for 24 hours.', 'success');
+      await fetchAssessment();
+    } catch (error) {
+      addNotification(error.response?.data?.error || 'Could not reopen this assessment.', 'error');
+    } finally {
+      setReopeningWindow(false);
     }
   };
 
@@ -182,6 +199,9 @@ const AssessmentDetailsPage = () => {
           </div>
         </div>
         <div className="flex gap-2">
+          {new Date(assessment.end_time || assessment.end_datetime) < new Date() && (
+            <Button variant="success" loading={reopeningWindow} onClick={handleReopenWindow}>Reopen for 24 hours</Button>
+          )}
           {!assessment.is_published && (
             <Button variant="success" loading={publishing} onClick={handlePublish}>Publish</Button>
           )}
