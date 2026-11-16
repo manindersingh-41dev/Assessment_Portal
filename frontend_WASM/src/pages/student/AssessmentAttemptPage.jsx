@@ -227,6 +227,8 @@ const AssessmentAttemptPage = () => {
   const [polling, setPolling] = useState(false);
   const [integrityWarnings, setIntegrityWarnings] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isMobileKeyboardOpen, setIsMobileKeyboardOpen] = useState(false);
+  const [visualViewportHeight, setVisualViewportHeight] = useState(0);
   const [startingAttempt, setStartingAttempt] = useState(false);
   const [startError, setStartError] = useState('');
   const [cheatingFlagSyncStatus, setCheatingFlagSyncStatus] = useState('');
@@ -949,6 +951,35 @@ const AssessmentAttemptPage = () => {
   }, [submissionIds, updateQuestionSubmissionStatus, updateSubmissionStatusError]);
 
   useEffect(() => {
+    const editorHasFocus = () => Boolean(
+      document.activeElement?.closest?.('.monaco-editor')
+        || document.activeElement?.matches?.('[aria-label="Code editor loading"]'),
+    );
+    const syncMobileViewport = () => {
+      const viewport = window.visualViewport;
+      if (!viewport) return;
+      const viewportHeight = Math.round(viewport.height);
+      const keyboardVisible = window.innerWidth < 1024
+        && editorHasFocus()
+        && (window.innerHeight - viewport.height > 120 || window.screen.height - viewport.height > 200);
+      setVisualViewportHeight(viewportHeight);
+      setIsMobileKeyboardOpen(keyboardVisible);
+    };
+    const onFocusChange = () => window.setTimeout(syncMobileViewport, 100);
+    window.visualViewport?.addEventListener('resize', syncMobileViewport);
+    window.addEventListener('resize', syncMobileViewport);
+    document.addEventListener('focusin', onFocusChange);
+    document.addEventListener('focusout', onFocusChange);
+    syncMobileViewport();
+    return () => {
+      window.visualViewport?.removeEventListener('resize', syncMobileViewport);
+      window.removeEventListener('resize', syncMobileViewport);
+      document.removeEventListener('focusin', onFocusChange);
+      document.removeEventListener('focusout', onFocusChange);
+    };
+  }, []);
+
+  useEffect(() => {
     const syncFullscreen = async () => {
       const tauriWindow = getTauriWindow();
       if (tauriWindow) {
@@ -975,6 +1006,11 @@ const AssessmentAttemptPage = () => {
       event.preventDefault();
       event.stopImmediatePropagation();
     };
+    const onBeforeInput = (event) => {
+      if (!['insertFromPaste', 'insertFromDrop'].includes(event.inputType)) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
     const onKeyDown = (event) => {
       const key = event.key.toLowerCase();
       const clipboardShortcut = ((event.ctrlKey || event.metaKey) && ['c', 'v', 'x'].includes(key))
@@ -990,6 +1026,8 @@ const AssessmentAttemptPage = () => {
     document.addEventListener('copy', onClipboard, true);
     document.addEventListener('cut', onClipboard, true);
     document.addEventListener('paste', onClipboard, true);
+    document.addEventListener('beforeinput', onBeforeInput, true);
+    document.addEventListener('drop', onClipboard, true);
     document.addEventListener('keydown', onKeyDown, true);
     document.addEventListener('fullscreenchange', onFullscreenChange);
     void syncFullscreen();
@@ -1001,6 +1039,8 @@ const AssessmentAttemptPage = () => {
       document.removeEventListener('copy', onClipboard, true);
       document.removeEventListener('cut', onClipboard, true);
       document.removeEventListener('paste', onClipboard, true);
+      document.removeEventListener('beforeinput', onBeforeInput, true);
+      document.removeEventListener('drop', onClipboard, true);
       document.removeEventListener('keydown', onKeyDown, true);
       document.removeEventListener('fullscreenchange', onFullscreenChange);
       if (fullscreenPoll) window.clearInterval(fullscreenPoll);
@@ -1363,7 +1403,8 @@ const AssessmentAttemptPage = () => {
   return (
     <div
       ref={attemptRootRef}
-      className="flex min-h-dvh min-w-0 flex-col bg-slate-950 text-slate-100 lg:h-dvh lg:min-h-0 lg:overflow-hidden"
+      className={`flex min-h-dvh min-w-0 flex-col bg-slate-950 text-slate-100 lg:h-dvh lg:min-h-0 lg:overflow-hidden ${isMobileKeyboardOpen ? 'overflow-hidden' : ''}`}
+      style={isMobileKeyboardOpen && visualViewportHeight ? { height: `${visualViewportHeight}px`, minHeight: 0 } : undefined}
       onContextMenu={(event) => event.preventDefault()}
     >
       {assignment.status === 'assigned' ? (
@@ -1390,7 +1431,7 @@ const AssessmentAttemptPage = () => {
         </section>
       ) : (
         <>
-      <header className="z-10 flex min-h-16 shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-800 bg-slate-900 px-3 py-2 sm:px-5">
+      <header className={`z-10 flex min-h-16 shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-800 bg-slate-900 px-3 py-2 sm:px-5 ${isMobileKeyboardOpen ? 'hidden' : ''}`}>
         <div className="flex min-w-0 items-center gap-3">
           <Button size="sm" variant="ghost" aria-label="Leave assessment" disabled={assignment.status === 'started' && !finalized} onClick={() => setShowExitConfirm(true)}>
             <ArrowLeft size={17} />
@@ -1446,7 +1487,7 @@ const AssessmentAttemptPage = () => {
         </div>
       )}
 
-      <nav className="flex shrink-0 items-center gap-2 overflow-x-auto border-b border-slate-800 bg-slate-900/70 px-3 py-2 sm:px-5" aria-label="Assessment questions">
+      <nav className={`flex shrink-0 items-center gap-2 overflow-x-auto border-b border-slate-800 bg-slate-900/70 px-3 py-2 sm:px-5 ${isMobileKeyboardOpen ? 'hidden' : ''}`} aria-label="Assessment questions">
         {questions.map((question, index) => {
           const result = submissionStatuses[question.id];
           const done = FINAL_STATES.has(result?.status);
@@ -1469,7 +1510,7 @@ const AssessmentAttemptPage = () => {
         </div>
       )}
 
-      <div className="shrink-0 border-b border-sky-900/60 bg-sky-950/30 px-4 py-2 text-xs text-sky-100" role="note">
+      <div className={`shrink-0 border-b border-sky-900/60 bg-sky-950/30 px-4 py-2 text-xs text-sky-100 ${isMobileKeyboardOpen ? 'hidden' : ''}`} role="note">
         C code runs in your browser. The server decides your final score, and results can rarely differ from local GCC.
       </div>
 
@@ -1498,8 +1539,8 @@ const AssessmentAttemptPage = () => {
         </div>
       )}
 
-      <main className="grid min-w-0 flex-1 grid-cols-1 lg:min-h-0 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] lg:grid-rows-1">
-        <section className="min-h-0 max-h-[42dvh] overflow-y-auto border-b border-slate-800 bg-slate-900 px-4 py-5 sm:px-6 lg:max-h-none lg:border-b-0 lg:border-r">
+      <main className={`grid min-w-0 flex-1 grid-cols-1 lg:min-h-0 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] lg:grid-rows-1 ${isMobileKeyboardOpen ? 'min-h-0' : ''}`}>
+        <section className={`min-h-0 max-h-[42dvh] overflow-y-auto border-b border-slate-800 bg-slate-900 px-4 py-5 sm:px-6 lg:max-h-none lg:border-b-0 lg:border-r ${isMobileKeyboardOpen ? 'hidden' : ''}`}>
           <div className="mb-5 flex items-start justify-between gap-3">
             <div>
               <div className="mb-2 flex items-center gap-2 text-xs uppercase tracking-wide text-slate-400">
@@ -1525,7 +1566,7 @@ const AssessmentAttemptPage = () => {
           </div>
         </section>
 
-        <section className="flex min-h-[55dvh] min-w-0 flex-col bg-slate-950 lg:min-h-0">
+        <section className={`flex min-h-[55dvh] min-w-0 flex-col bg-slate-950 lg:min-h-0 ${isMobileKeyboardOpen ? 'h-full min-h-0' : ''}`}>
           <div ref={workspacePanelsRef} className="flex min-h-0 flex-1 flex-col">
             <div className="flex min-h-0 flex-1 flex-col p-3 sm:p-4">
             <div className="mb-2 flex shrink-0 items-center justify-between gap-3">
@@ -1536,13 +1577,13 @@ const AssessmentAttemptPage = () => {
                 {draftSaveStatus === 'saving' ? 'Saving…' : draftSaveStatus === 'error' ? 'Saved in this browser · sync failed' : 'Saved'} · C11
               </span>
             </div>
-            <div className="min-h-48 min-w-0 flex-1 overflow-hidden rounded-xl border border-slate-800 lg:min-h-0">
+            <div className={`min-h-48 min-w-0 flex-1 overflow-hidden rounded-xl border border-slate-800 lg:min-h-0 ${isMobileKeyboardOpen ? 'min-h-0' : ''}`}>
               <CodeEditor code={currentCode} onChange={(value) => updateCode(currentQuestion.id, value)}
                 language="c" readOnly={!canEdit} fontSize={14} />
             </div>
           </div>
 
-          {hasResultsPanel && (
+          {hasResultsPanel && !isMobileKeyboardOpen && (
             <>
               <div
                 role="separator"

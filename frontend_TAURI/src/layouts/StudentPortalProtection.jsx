@@ -7,7 +7,7 @@ const StudentPortalProtection = () => {
     const blockDeveloperToolsShortcuts = (event) => {
       const key = event.key.toLowerCase();
       const modifier = event.ctrlKey || event.metaKey;
-      const inspectShortcut = modifier && event.shiftKey && ['i', 'j', 'c', 'k'].includes(key);
+      const inspectShortcut = modifier && event.shiftKey && ['i', 'j', 'c', 'k', 'm', 'p'].includes(key);
       const macInspectShortcut = event.metaKey && event.altKey && ['i', 'j', 'c'].includes(key);
       const blocked = key === 'f12'
         || (modifier && key === 'u')

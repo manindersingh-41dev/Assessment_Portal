@@ -167,6 +167,10 @@ class AssessmentCreateUpdateSerializer(serializers.ModelSerializer):
                 {"questions": "Add at least one question to the assessment."}
             )
         if questions is not None:
+            if not questions:
+                raise serializers.ValidationError(
+                    {"questions": "An assessment must include at least one question."}
+                )
             question_ids = [item["question"].id for item in questions]
             if len(question_ids) != len(set(question_ids)):
                 raise serializers.ValidationError(
@@ -182,24 +186,66 @@ class AssessmentCreateUpdateSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     {"questions": "Assessment total marks cannot exceed 1,000."}
                 )
+            if self.instance is not None:
+                requested_question_ids = set(question_ids)
+                removed_questions = self.instance.assessment_questions.exclude(
+                    question_id__in=requested_question_ids
+                )
+                if any(
+                    link.answer_drafts.exists() or link.submissions.exists()
+                    for link in removed_questions
+                ):
+                    raise serializers.ValidationError(
+                        {
+                            "questions": (
+                                "A question cannot be removed after students have "
+                                "saved a draft or submitted code for it."
+                            )
+                        }
+                    )
             attrs["total_marks"] = total_marks
 
         return attrs
 
     @staticmethod
     def _replace_questions(assessment, questions):
-        assessment.assessment_questions.all().delete()
-        links = []
+        existing_links = {
+            link.question_id: link
+            for link in assessment.assessment_questions.all()
+        }
+        requested_question_ids = {item["question"].id for item in questions}
+        new_links = []
         for index, item in enumerate(questions, start=1):
-            links.append(
-                AssessmentQuestion(
-                    assessment=assessment,
-                    question=item["question"],
-                    marks=item["marks"],
-                    order=item.get("order", index),
+            question = item["question"]
+            question_id = question.id
+            order = item.get("order", index)
+            link = existing_links.get(question_id)
+            if link is None:
+                new_links.append(
+                    AssessmentQuestion(
+                        assessment=assessment,
+                        question=question,
+                        marks=item["marks"],
+                        order=order,
+                    )
                 )
-            )
-        AssessmentQuestion.objects.bulk_create(links)
+                continue
+
+            changed_fields = []
+            if link.marks != item["marks"]:
+                link.marks = item["marks"]
+                changed_fields.append("marks")
+            if link.order != order:
+                link.order = order
+                changed_fields.append("order")
+            if changed_fields:
+                link.save(update_fields=[*changed_fields, "updated_at"])
+
+        if new_links:
+            AssessmentQuestion.objects.bulk_create(new_links)
+        assessment.assessment_questions.exclude(
+            question_id__in=requested_question_ids
+        ).delete()
 
     @transaction.atomic
     def create(self, validated_data):
