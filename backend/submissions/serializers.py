@@ -119,6 +119,19 @@ class CodeSubmissionStatusSerializer(serializers.ModelSerializer):
         ).values_list('error_message', flat=True).first()
 
 
+class CodeSubmissionStatusSummarySerializer(serializers.ModelSerializer):
+    """Small status payload for frequent client polling."""
+
+    class Meta:
+        model = CodeSubmission
+        fields = [
+            'id', 'status', 'verdict', 'marks_obtained',
+            'total_test_cases', 'passed_test_cases', 'failed_test_cases',
+            'updated_at',
+        ]
+        read_only_fields = fields
+
+
 class CodeSubmissionResultSerializer(serializers.ModelSerializer):
     """Serializer for submission result with test case verdicts."""
 
@@ -380,13 +393,10 @@ class CodeSubmissionListSerializer(serializers.ModelSerializer):
         """Return a student-safe error from compilation or a visible sample case."""
         if obj.compilation_error:
             return obj.compilation_error
-        return obj.test_case_verdicts.filter(
-            is_sample=True
-        ).exclude(
-            error_message__isnull=True
-        ).exclude(
-            error_message=''
-        ).values_list('error_message', flat=True).first()
+        for verdict in obj.test_case_verdicts.all():
+            if verdict.is_sample and verdict.error_message:
+                return verdict.error_message
+        return None
 
 
 class CodeSubmissionDetailSerializer(serializers.ModelSerializer):

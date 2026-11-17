@@ -238,6 +238,32 @@ class QuestionSerializer(serializers.ModelSerializer):
         return {"id": str(assessment_id), "title": assessment_title}
 
 
+class QuestionListSerializer(serializers.ModelSerializer):
+    """Compact fields used by paginated question-bank and picker lists."""
+
+    question_id = serializers.UUIDField(source="id", read_only=True)
+    created_by_email = serializers.EmailField(source="created_by.email", read_only=True)
+    has_submissions = serializers.BooleanField(read_only=True)
+    latest_assessment = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Question
+        fields = [
+            "id", "question_id", "title", "description", "difficulty", "topic",
+            "language", "total_marks", "status", "time_limit_seconds",
+            "memory_limit_mb", "created_by", "created_by_email", "has_submissions",
+            "latest_assessment", "created_at", "updated_at",
+        ]
+        read_only_fields = fields
+
+    def get_latest_assessment(self, obj):
+        assessment_id = getattr(obj, "latest_assessment_id", None)
+        assessment_title = getattr(obj, "latest_assessment_title", None)
+        if not assessment_id or not assessment_title:
+            return None
+        return {"id": str(assessment_id), "title": assessment_title}
+
+
 class QuestionCreateUpdateSerializer(serializers.ModelSerializer):
     """Create/update a question, including its test cases atomically."""
 

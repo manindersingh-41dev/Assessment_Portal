@@ -187,11 +187,10 @@ const CreateAssessmentWizard = ({ isEdit = false, assessmentId = null }) => {
           });
 
           try {
-            const assignmentResponse = await api.get(endpoints.assessments.assignments(assessmentId));
-            const assignmentData = assignmentResponse.data?.assignments || assignmentResponse.data;
-            const ids = asList(assignmentData)
-              .map((assignment) => assignment.student?.id || assignment.student)
-              .filter(Boolean);
+            const assignmentResponse = await api.get(endpoints.assessments.assignments(assessmentId), {
+              params: { student_ids_only: 1 },
+            });
+            const ids = asList(assignmentResponse.data?.student_ids).filter(Boolean);
             if (active) setSelectedStudents(ids);
           } catch {
             // Assignment data is optional for editing assessment content.

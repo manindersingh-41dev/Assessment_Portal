@@ -898,8 +898,18 @@ const AssessmentAttemptPage = () => {
       setPolling(true);
       await Promise.all(pending.map(async ([questionId, submissionId]) => {
           try {
-            const response = await api.get(endpoints.submissions.status(submissionId), { signal: controller.signal });
-            const result = response.data;
+            const response = await api.get(endpoints.submissions.status(submissionId), {
+              params: { summary: 1 },
+              signal: controller.signal,
+            });
+            let result = response.data;
+            if (FINAL_STATES.has(result.status)) {
+              const detailResponse = await api.get(
+                endpoints.submissions.status(submissionId),
+                { signal: controller.signal },
+              );
+              result = detailResponse.data;
+            }
             if (controller.signal.aborted) return;
             const existing = submissionStatusesRef.current[questionId] || {};
             const nextStatus = {
@@ -942,7 +952,7 @@ const AssessmentAttemptPage = () => {
       }
     };
 
-    intervalId = window.setInterval(poll, 5000);
+    intervalId = window.setInterval(poll, 10000);
     poll();
     return () => {
       controller.abort();
@@ -1062,11 +1072,11 @@ const AssessmentAttemptPage = () => {
       requestInFlight = true;
       try {
         const response = await api.get(
-          endpoints.assessments.assignmentDetail(assignment.id),
+          endpoints.assessments.assignmentFlagStatus(assignment.id),
           { signal: controller.signal },
         );
         if (controller.signal.aborted) return;
-        const latestAssignment = response.data?.assignment || response.data;
+        const latestAssignment = { ...assignment, ...response.data };
         setAssignment(latestAssignment);
         if (!latestAssignment.is_flagged_cheating) {
           cheatingFlagRequestRef.current = false;
@@ -1083,7 +1093,7 @@ const AssessmentAttemptPage = () => {
       }
     };
 
-    const interval = window.setInterval(refreshCheatingFlag, 3_000);
+    const interval = window.setInterval(refreshCheatingFlag, 15000);
     return () => {
       controller.abort();
       window.clearInterval(interval);

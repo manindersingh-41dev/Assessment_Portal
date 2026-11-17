@@ -11,7 +11,7 @@ from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
-from django.db.models import Count, F, Q, prefetch_related_objects
+from django.db.models import Count, F, Prefetch, Q, prefetch_related_objects
 from django.db import transaction
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
@@ -199,26 +199,27 @@ class AssessmentViewSet(viewsets.ModelViewSet):
         )
 
     @action(detail=True, methods=['post'], url_path='reopen-window')
+    @transaction.atomic
     def reopen_window(self, request, pk=None):
         """Extend an expired assessment window by 24 hours for pending students."""
         assessment = self.get_object()
-        if assessment.end_datetime >= timezone.now():
+        now = timezone.now()
+        if assessment.end_time >= now:
             return Response(
                 {'error': 'This assessment is still open.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        now = timezone.now()
         new_end = now + timedelta(hours=24)
-        assessment.end_datetime = new_end
+        assessment.end_time = new_end
         assessment.status = Assessment.Status.ACTIVE
-        assessment.save(update_fields=['end_datetime', 'status', 'updated_at'])
+        assessment.save(update_fields=['end_time', 'status', 'updated_at'])
         # Custom assignment deadlines must also move, otherwise they would
         # continue blocking students despite the assessment window being open.
         assessment.assignments.filter(
             status__in=[AssessmentAssignment.Status.ASSIGNED, AssessmentAssignment.Status.STARTED],
-            deadline__isnull=False,
-        ).update(deadline=new_end, updated_at=now)
+            due_at__isnull=False,
+        ).update(due_at=new_end, updated_at=now)
         return Response({
             'message': 'Assessment reopened for 24 hours.',
             'end_datetime': new_end,
@@ -251,11 +252,7 @@ class AssessmentViewSet(viewsets.ModelViewSet):
         return Response(
             {
                 'message': f'{len(assignments)} assignment(s) created successfully',
-                'assignments': AssessmentAssignmentSerializer(
-                    assignments,
-                    many=True,
-                    context={'request': request}
-                ).data
+                'created_count': len(assignments),
             },
             status=status.HTTP_201_CREATED
         )
@@ -267,20 +264,45 @@ class AssessmentViewSet(viewsets.ModelViewSet):
 
         assignments = AssessmentAssignment.objects.filter(
             assessment=assessment
-        ).prefetch_related('notifications').order_by('-created_at')
+        ).select_related(
+            'assessment', 'student', 'cheating_flag_cleared_by'
+        ).prefetch_related(
+            Prefetch(
+                'notifications',
+                queryset=AssessmentNotification.objects.filter(
+                    kind=AssessmentNotification.Kind.ASSIGNED
+                ),
+            )
+        ).order_by('-created_at')
 
+        if request.query_params.get('student_ids_only') == '1':
+            return Response({
+                'student_ids': list(assignments.values_list('student_id', flat=True)),
+            })
+
+        paginator = AssessmentPagination()
+        page = paginator.paginate_queryset(assignments, request, view=self)
+        total_assignments = (
+            paginator.page.paginator.count if page is not None else assignments.count()
+        )
         serializer = AssessmentAssignmentSerializer(
-            assignments,
+            page if page is not None else assignments,
             many=True,
             context={'request': request}
+        )
+        paginated_data = (
+            paginator.get_paginated_response(serializer.data).data
+            if page is not None else {}
         )
 
         return Response(
             {
                 'assessment_id': assessment.id,
                 'assessment_title': assessment.title,
-                'total_assignments': assignments.count(),
-                'assignments': serializer.data
+                'total_assignments': total_assignments,
+                'next': paginated_data.get('next'),
+                'previous': paginated_data.get('previous'),
+                'assignments': paginated_data.get('results', serializer.data)
             }
         )
 
@@ -380,17 +402,42 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
             # Faculty sees assignments for their assessments
             return AssessmentAssignment.objects.filter(
                 assessment__created_by=user
-            ).prefetch_related('notifications').order_by('-created_at')
+            ).select_related(
+                'assessment', 'student', 'cheating_flag_cleared_by'
+            ).prefetch_related(
+                Prefetch(
+                    'notifications',
+                    queryset=AssessmentNotification.objects.filter(
+                        kind=AssessmentNotification.Kind.ASSIGNED
+                    ),
+                )
+            ).order_by('-created_at')
 
         elif user.role == 'student':
             # Materialize assignments for open assessments on demand so the
             # existing attempt and progress APIs work for current and future students.
-            AssignmentService.ensure_open_assessment_assignments(user)
+            if self.action == 'list':
+                AssignmentService.ensure_open_assessment_assignments(user)
             return AssessmentAssignment.objects.filter(
                 student=user
             ).select_related('assessment').order_by('-created_at')
 
         return AssessmentAssignment.objects.none()
+
+    @action(detail=True, methods=['get'], url_path='flag-status')
+    def flag_status(self, request, pk=None):
+        """Return only the fields needed to synchronize a student coding lock."""
+        assignment = self.get_object()
+        if request.user.role != 'student' or assignment.student_id != request.user.id:
+            return Response(
+                {'error': 'Only the assigned student can view this attempt status.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        return Response({
+            'is_flagged_cheating': assignment.is_flagged_cheating,
+            'cheating_flag_reason': assignment.cheating_flag_reason,
+            'cheating_flag_cleared_at': assignment.cheating_flag_cleared_at,
+        })
 
     @action(detail=True, methods=['post'], url_path='flag-cheating')
     def flag_cheating(self, request, pk=None):

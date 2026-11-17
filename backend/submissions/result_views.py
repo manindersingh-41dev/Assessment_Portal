@@ -49,20 +49,37 @@ class StudentSubmissionViewSet(viewsets.ViewSet):
         """
         assignment_id = request.query_params.get('assignment_id')
 
-        submissions = SubmissionAggregationService.get_student_submissions(
-            student_id=str(request.user.id),
-            assignment_id=assignment_id
-        )
-
+        submissions = CodeSubmission.objects.filter(
+            student=request.user
+        ).select_related(
+            'assignment__assessment', 'question__question'
+        ).only(
+            'id', 'assignment_id', 'question_id', 'status', 'verdict',
+            'marks_obtained', 'total_test_cases', 'passed_test_cases',
+            'attempt_number', 'created_at', 'assignment__assessment__title',
+            'question__order', 'question__question__title',
+        ).order_by('-created_at')
+        if assignment_id:
+            submissions = submissions.filter(assignment_id=assignment_id)
         paginator = self.pagination_class()
         page = paginator.paginate_queryset(submissions, request)
-
-        if page is not None:
-            serializer = StudentSubmissionHistorySerializer(page, many=True)
-            return paginator.get_paginated_response(serializer.data)
-
-        serializer = StudentSubmissionHistorySerializer(submissions, many=True)
-        return Response(serializer.data)
+        history_rows = [{
+            'id': submission.id,
+            'assessment_title': submission.assignment.assessment.title,
+            'question_title': submission.question.question.title,
+            'question_order': submission.question.order,
+            'status': submission.status,
+            'status_display': submission.get_status_display(),
+            'verdict': submission.verdict,
+            'verdict_display': submission.get_verdict_display(),
+            'marks_obtained': submission.marks_obtained,
+            'total_test_cases': submission.total_test_cases,
+            'passed_test_cases': submission.passed_test_cases,
+            'attempt_number': submission.attempt_number,
+            'created_at': submission.created_at,
+        } for submission in page]
+        serializer = StudentSubmissionHistorySerializer(history_rows, many=True)
+        return paginator.get_paginated_response(serializer.data)
 
     @action(detail=False, methods=['get'])
     def results(self, request):
@@ -78,14 +95,13 @@ class StudentSubmissionViewSet(viewsets.ViewSet):
                 AssessmentAssignment.Status.GRADED,
             ],
         ).select_related('assessment', 'student').order_by('-submitted_at', '-created_at')
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(assignments, request)
         results = [
             SubmissionAggregationService.get_assignment_scorecard(assignment)
-            for assignment in assignments
+            for assignment in (page if page is not None else assignments)
         ]
-
-        paginator = self.pagination_class()
-        page = paginator.paginate_queryset(results, request)
-        return paginator.get_paginated_response(page if page is not None else results)
+        return paginator.get_paginated_response(results)
 
     @action(detail=False, methods=['get'])
     def assignment_result(self, request):
@@ -103,7 +119,9 @@ class StudentSubmissionViewSet(viewsets.ViewSet):
             )
 
         try:
-            assignment = AssessmentAssignment.objects.get(
+            assignment = AssessmentAssignment.objects.select_related(
+                'assessment', 'student'
+            ).get(
                 id=assignment_id,
                 student=request.user
             )
@@ -141,7 +159,9 @@ class StudentSubmissionViewSet(viewsets.ViewSet):
             )
 
         try:
-            assignment = AssessmentAssignment.objects.get(
+            assignment = AssessmentAssignment.objects.select_related(
+                'assessment', 'student'
+            ).get(
                 id=assignment_id,
                 student=request.user
             )
@@ -155,10 +175,12 @@ class StudentSubmissionViewSet(viewsets.ViewSet):
         submissions = CodeSubmission.objects.filter(
             assignment=assignment,
             question_id=question_id
-        ).order_by('-created_at')
+        ).select_related('question__question').order_by('-created_at')
 
-        serializer = SubmissionSummarySerializer(submissions, many=True)
-        return Response(serializer.data)
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(submissions, request)
+        serializer = SubmissionSummarySerializer(page, many=True)
+        return paginator.get_paginated_response(serializer.data)
 
 
 class FacultyResultViewSet(viewsets.ViewSet):
@@ -185,20 +207,42 @@ class FacultyResultViewSet(viewsets.ViewSet):
                     status=status.HTTP_404_NOT_FOUND
                 )
 
-        submissions = SubmissionAggregationService.get_assessment_submissions(
-            assessment_id=assessment_id,
-            faculty_id=str(request.user.id),
-        )
-
+        submissions = CodeSubmission.objects.select_related(
+            'assignment__assessment', 'student', 'question__question'
+        ).only(
+            'id', 'assignment_id', 'student_id', 'question_id', 'status', 'verdict',
+            'marks_obtained', 'total_test_cases', 'passed_test_cases',
+            'attempt_number', 'created_at', 'assignment__assessment_id',
+            'assignment__assessment__title', 'student__first_name',
+            'student__last_name', 'student__email', 'question__order',
+            'question__question__title',
+        ).order_by('-created_at')
+        if assessment_id:
+            submissions = submissions.filter(assignment__assessment_id=assessment_id)
+        else:
+            submissions = submissions.filter(assignment__assessment__created_by=request.user)
         paginator = self.pagination_class()
         page = paginator.paginate_queryset(submissions, request)
-
-        if page is not None:
-            serializer = AssessmentSubmissionOverviewSerializer(page, many=True)
-            return paginator.get_paginated_response(serializer.data)
-
-        serializer = AssessmentSubmissionOverviewSerializer(submissions, many=True)
-        return Response(serializer.data)
+        overview_rows = [{
+            'id': submission.id,
+            'assessment_id': submission.assignment.assessment_id,
+            'assessment_title': submission.assignment.assessment.title,
+            'student_name': submission.student.get_full_name(),
+            'student_email': submission.student.email,
+            'question_title': submission.question.question.title,
+            'question_order': submission.question.order,
+            'status': submission.status,
+            'status_display': submission.get_status_display(),
+            'verdict': submission.verdict,
+            'verdict_display': submission.get_verdict_display(),
+            'marks_obtained': submission.marks_obtained,
+            'total_test_cases': submission.total_test_cases,
+            'passed_test_cases': submission.passed_test_cases,
+            'attempt_number': submission.attempt_number,
+            'created_at': submission.created_at,
+        } for submission in page]
+        serializer = AssessmentSubmissionOverviewSerializer(overview_rows, many=True)
+        return paginator.get_paginated_response(serializer.data)
 
     @action(detail=False, methods=['get'])
     def student_submissions(self, request):
@@ -227,10 +271,14 @@ class FacultyResultViewSet(viewsets.ViewSet):
         submissions = CodeSubmission.objects.filter(
             assignment__assessment=assessment,
             student_id=student_id
+        ).select_related(
+            'assignment__assessment', 'question__question'
         ).order_by('-created_at')
 
-        serializer = SubmissionSummarySerializer(submissions, many=True)
-        return Response(serializer.data)
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(submissions, request)
+        serializer = SubmissionSummarySerializer(page, many=True)
+        return paginator.get_paginated_response(serializer.data)
 
     @action(detail=False, methods=['get'])
     def submission_details(self, request):

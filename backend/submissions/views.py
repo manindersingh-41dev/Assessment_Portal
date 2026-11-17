@@ -13,13 +13,15 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from django.conf import settings
+from django.db.models import Prefetch
 from django.shortcuts import get_object_or_404
 
 from assessments.models import AssessmentAssignment, AssessmentQuestion
 from questions.models import TestCase as QuestionTestCase
-from .models import CodeSubmission, ExecutionLog
+from .models import CodeSubmission, ExecutionLog, TestCaseVerdict
 from .serializers import (
     CodeSubmissionCreateSerializer, CodeSubmissionStatusSerializer,
+    CodeSubmissionStatusSummarySerializer,
     CodeSubmissionResultSerializer, CodeSubmissionListSerializer,
     CodeSubmissionDetailSerializer, ExecutionLogSerializer,
     SubmissionStatsSerializer, ClientEvaluationCreateSerializer,
@@ -361,7 +363,18 @@ class CodeSubmissionViewSet(viewsets.ReadOnlyModelViewSet):
         user = self.request.user
 
         if user.role == 'student':
-            return CodeSubmission.objects.filter(student=user).order_by('-created_at')
+            return CodeSubmission.objects.filter(student=user).select_related(
+                'question__question'
+            ).prefetch_related(
+                Prefetch(
+                    'test_case_verdicts',
+                    queryset=TestCaseVerdict.objects.filter(is_sample=True).exclude(
+                        error_message__isnull=True
+                    ).exclude(error_message='').only(
+                        'submission_id', 'is_sample', 'error_message', 'test_case_order'
+                    ).order_by('test_case_order'),
+                )
+            ).order_by('-created_at')
 
         return CodeSubmission.objects.none()
 
@@ -490,7 +503,12 @@ class SubmissionStatusView(viewsets.ViewSet):
         if request.user.role not in {"student", "faculty"}:
             return Response({"error": "Insufficient permissions"}, status=403)
 
-        return Response(CodeSubmissionStatusSerializer(submission).data)
+        serializer_class = (
+            CodeSubmissionStatusSummarySerializer
+            if request.query_params.get('summary') == '1'
+            else CodeSubmissionStatusSerializer
+        )
+        return Response(serializer_class(submission).data)
 
     @action(detail=True, methods=['post'])
     def retry(self, request, pk=None):
@@ -610,6 +628,15 @@ class SubmissionListView(viewsets.ViewSet):
 
         submissions = CodeSubmission.objects.filter(
             student=request.user
+        ).select_related('question__question').prefetch_related(
+            Prefetch(
+                'test_case_verdicts',
+                queryset=TestCaseVerdict.objects.filter(is_sample=True).exclude(
+                    error_message__isnull=True
+                ).exclude(error_message='').only(
+                    'submission_id', 'is_sample', 'error_message', 'test_case_order'
+                ).order_by('test_case_order'),
+            )
         ).order_by('-created_at')
 
         paginator = self.pagination_class()
@@ -658,8 +685,22 @@ class SubmissionListView(viewsets.ViewSet):
                     status=status.HTTP_403_FORBIDDEN
                 )
 
-            submissions = CodeSubmission.objects.filter(
+            latest_submission_ids = CodeSubmission.objects.filter(
                 assignment=assignment
+            ).order_by(
+                'question_id', '-created_at', '-id'
+            ).distinct('question_id').values('id')
+            submissions = CodeSubmission.objects.filter(
+                id__in=latest_submission_ids
+            ).select_related('question__question').prefetch_related(
+                Prefetch(
+                    'test_case_verdicts',
+                    queryset=TestCaseVerdict.objects.filter(is_sample=True).exclude(
+                        error_message__isnull=True
+                    ).exclude(error_message='').only(
+                        'submission_id', 'is_sample', 'error_message', 'test_case_order'
+                    ).order_by('test_case_order'),
+                )
             ).order_by('-created_at')
 
             paginator = self.pagination_class()

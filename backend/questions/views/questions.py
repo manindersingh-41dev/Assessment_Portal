@@ -10,13 +10,15 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from django.db.models import OuterRef, Subquery
+from django.apps import apps
+from django.db.models import BooleanField, Exists, OuterRef, Subquery, Value
 
 from assessments.models import AssessmentQuestion
 from questions.models import Question
 from questions.permissions import IsFacultyOrReadOnly, IsQuestionOwner
 from questions.serializers import (
     QuestionBulkCreateSerializer,
+    QuestionListSerializer,
     QuestionCreateUpdateSerializer,
     QuestionSerializer,
 )
@@ -29,7 +31,8 @@ def question_list_create(request):
     """List questions (filtered to active for students) or create a new one."""
 
     if request.method == "GET":
-        queryset = Question.objects.all()
+        queryset = Question.objects.select_related("created_by").all()
+        code_submission_model = apps.get_model("submissions", "CodeSubmission")
         # Faculty manage only their own questions; students only see active ones.
         if request.user.is_faculty():
             queryset = queryset.filter(created_by=request.user)
@@ -43,13 +46,20 @@ def question_list_create(request):
             queryset = queryset.annotate(
                 latest_assessment_id=Subquery(latest_usage.values("assessment_id")[:1]),
                 latest_assessment_title=Subquery(latest_usage.values("assessment__title")[:1]),
+                has_submissions=Exists(
+                    code_submission_model.objects.filter(
+                        question__question_id=OuterRef("pk")
+                    )
+                ),
             )
         else:
-            queryset = queryset.filter(status=Question.Status.ACTIVE)
+            queryset = queryset.filter(status=Question.Status.ACTIVE).annotate(
+                has_submissions=Value(False, output_field=BooleanField()),
+            )
 
         paginator = PageNumberPagination()
         page = paginator.paginate_queryset(queryset, request)
-        serializer = QuestionSerializer(page, many=True, context={"request": request})
+        serializer = QuestionListSerializer(page, many=True, context={"request": request})
         return paginator.get_paginated_response(serializer.data)
 
     # POST - create (faculty only enforced by permission)

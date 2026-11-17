@@ -26,6 +26,9 @@ const dateLabel = (value) => {
 const AssessmentDetailsPage = () => {
   const [assessment, setAssessment] = useState(null);
   const [assignments, setAssignments] = useState([]);
+  const [totalAssignments, setTotalAssignments] = useState(0);
+  const [assignmentPage, setAssignmentPage] = useState(1);
+  const [hasMoreAssignments, setHasMoreAssignments] = useState(false);
   const [loading, setLoading] = useState(true);
   const [publishing, setPublishing] = useState(false);
   const [reopeningWindow, setReopeningWindow] = useState(false);
@@ -40,13 +43,16 @@ const AssessmentDetailsPage = () => {
     try {
       const [assessmentResponse, assignmentResponse] = await Promise.all([
         api.get(endpoints.assessments.detail(id)),
-        api.get(endpoints.assessments.assignments(id)),
+        api.get(endpoints.assessments.assignments(id), { params: { page: 1, page_size: 20 } }),
       ]);
       const current = assessmentResponse.data?.assessment || assessmentResponse.data;
       setAssessment(current);
       setLoadError('');
       const assignmentData = assignmentResponse.data?.assignments || assignmentResponse.data?.results || [];
       setAssignments(Array.isArray(assignmentData) ? assignmentData : []);
+      setTotalAssignments(assignmentResponse.data?.total_assignments ?? assignmentData.length);
+      setAssignmentPage(1);
+      setHasMoreAssignments(Boolean(assignmentResponse.data?.next));
     } catch (error) {
       const message = error.response?.data?.detail || 'Failed to load assessment details.';
       setLoadError(message);
@@ -60,7 +66,7 @@ const AssessmentDetailsPage = () => {
     let active = true;
     Promise.all([
       api.get(endpoints.assessments.detail(id)),
-      api.get(endpoints.assessments.assignments(id)),
+      api.get(endpoints.assessments.assignments(id), { params: { page: 1, page_size: 20 } }),
     ])
       .then(([assessmentResponse, assignmentResponse]) => {
         if (!active) return;
@@ -68,6 +74,9 @@ const AssessmentDetailsPage = () => {
         setAssessment(current);
         const assignmentData = assignmentResponse.data?.assignments || assignmentResponse.data?.results || [];
         setAssignments(Array.isArray(assignmentData) ? assignmentData : []);
+        setTotalAssignments(assignmentResponse.data?.total_assignments ?? assignmentData.length);
+        setAssignmentPage(1);
+        setHasMoreAssignments(Boolean(assignmentResponse.data?.next));
         setLoadError('');
       })
       .catch((error) => {
@@ -85,6 +94,21 @@ const AssessmentDetailsPage = () => {
   const retryFetchAssessment = () => {
     setLoading(true);
     fetchAssessment();
+  };
+
+  const loadMoreAssignments = async () => {
+    const nextPage = assignmentPage + 1;
+    try {
+      const response = await api.get(endpoints.assessments.assignments(id), {
+        params: { page: nextPage, page_size: 20 },
+      });
+      const pageAssignments = response.data?.assignments || response.data?.results || [];
+      setAssignments((current) => [...current, ...(Array.isArray(pageAssignments) ? pageAssignments : [])]);
+      setAssignmentPage(nextPage);
+      setHasMoreAssignments(Boolean(response.data?.next));
+    } catch (error) {
+      addNotification(error.response?.data?.detail || 'Could not load more assigned students.', 'error');
+    }
   };
 
   const handlePublish = async () => {
@@ -273,7 +297,7 @@ const AssessmentDetailsPage = () => {
 
         <Card className="h-fit">
           <CardTitle>Assigned students</CardTitle>
-          <CardDescription>{assignments.length} student{assignments.length === 1 ? '' : 's'} assigned</CardDescription>
+          <CardDescription>{totalAssignments} student{totalAssignments === 1 ? '' : 's'} assigned</CardDescription>
           <div className="mt-4 max-h-[28rem] space-y-2 overflow-y-auto">
             {assignments.map((assignment) => {
               const notifications = assignment.email_notifications || [];
@@ -352,6 +376,11 @@ const AssessmentDetailsPage = () => {
               </div>
             )}
           </div>
+          {hasMoreAssignments && (
+            <Button className="mt-3 w-full" size="sm" variant="secondary" onClick={loadMoreAssignments}>
+              Load more students ({assignments.length} of {totalAssignments})
+            </Button>
+          )}
           <div className="mt-5 border-t border-slate-100 pt-4 dark:border-slate-800">
             <p className="text-xs text-slate-500">Submission review and grading will be connected in Module 8.</p>
           </div>

@@ -170,7 +170,7 @@ const FacultyResultsPage = () => {
 
     const interval = window.setInterval(() => {
       loadAssessmentResults(backgroundRefreshAssessmentId, resultSet.page || 1);
-    }, 8000);
+    }, 20000);
     return () => window.clearInterval(interval);
   }, [assessmentResults, backgroundRefreshAssessmentId, expandedAssessmentId, loadAssessmentResults]);
 

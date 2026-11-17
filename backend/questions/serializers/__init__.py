@@ -2,6 +2,7 @@
 
 from questions.serializers.question import (
     QuestionSerializer,
+    QuestionListSerializer,
     QuestionBulkCreateSerializer,
     QuestionCreateUpdateSerializer,
     TestCaseSerializer,
@@ -11,6 +12,7 @@ from questions.serializers.question import (
 
 __all__ = [
     "QuestionSerializer",
+    "QuestionListSerializer",
     "QuestionBulkCreateSerializer",
     "QuestionCreateUpdateSerializer",
     "TestCaseSerializer",

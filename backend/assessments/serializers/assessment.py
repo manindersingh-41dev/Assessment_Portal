@@ -82,7 +82,6 @@ class AssessmentSerializer(serializers.ModelSerializer):
     """List representation of an assessment."""
 
     created_by_email = serializers.EmailField(source="created_by.email", read_only=True)
-    assessment_questions = AssessmentQuestionSerializer(many=True, read_only=True)
     question_count = serializers.IntegerField(read_only=True)
     assignment_count = serializers.IntegerField(read_only=True)
 
@@ -98,13 +97,11 @@ class AssessmentSerializer(serializers.ModelSerializer):
             "duration_minutes",
             "is_timed",
             "total_marks",
-            "instructions",
             "is_published",
             "is_open_to_all_students",
             "published_at",
             "created_by",
             "created_by_email",
-            "assessment_questions",
             "question_count",
             "assignment_count",
             "created_at",
@@ -289,7 +286,7 @@ class AssessmentDetailSerializer(AssessmentSerializer):
     )
 
     class Meta(AssessmentSerializer.Meta):
-        fields = AssessmentSerializer.Meta.fields + ["questions"]
+        fields = AssessmentSerializer.Meta.fields + ["instructions", "questions"]
 
 
 class AssessmentAssignmentSerializer(serializers.ModelSerializer):
@@ -306,9 +303,7 @@ class AssessmentAssignmentSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         if not request or getattr(request.user, "role", None) != "faculty":
             return []
-        notifications = assignment.notifications.filter(
-            kind=AssessmentNotification.Kind.ASSIGNED
-        )
+        notifications = assignment.notifications.all()
         return AssessmentNotificationSerializer(notifications, many=True).data
 
     class Meta:

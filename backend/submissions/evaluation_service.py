@@ -439,11 +439,19 @@ class SubmissionAggregationService:
         questions = list(
             AssessmentQuestion.objects.filter(assessment=assignment.assessment)
             .select_related('question')
+            .only(
+                'id', 'assessment_id', 'question_id', 'order', 'marks',
+                'created_at', 'question__title',
+            )
             .order_by('order', 'created_at')
         )
         submissions = list(
             CodeSubmission.objects.filter(assignment=assignment)
-            .select_related('question', 'question__question')
+            .only(
+                'id', 'question_id', 'status', 'marks_obtained',
+                'total_test_cases', 'passed_test_cases', 'attempt_number',
+                'created_at', 'updated_at', 'verdict', 'evaluation_generation',
+            )
             .order_by('attempt_number', 'created_at', 'id')
         )
         submissions_by_question = {}
