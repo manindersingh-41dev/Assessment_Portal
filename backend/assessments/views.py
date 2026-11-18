@@ -11,7 +11,17 @@ from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
-from django.db.models import Count, F, Prefetch, Q, prefetch_related_objects
+from django.db.models import (
+    Avg,
+    Count,
+    ExpressionWrapper,
+    F,
+    FloatField,
+    Prefetch,
+    Q,
+    Value,
+    prefetch_related_objects,
+)
 from django.db import transaction
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
@@ -75,12 +85,23 @@ class AssessmentViewSet(viewsets.ModelViewSet):
         """Filter assessments based on user role."""
         user = self.request.user
 
+        detail_prefetch = []
+        if self.action == 'retrieve':
+            detail_prefetch.append(
+                Prefetch(
+                    'assessment_questions',
+                    queryset=AssessmentQuestion.objects.select_related('question'),
+                )
+            )
+
         if user.role == 'faculty' and user.is_faculty_approved:
             # Faculty sees their own assessments
             return Assessment.objects.filter(created_by=user).annotate(
                 question_count=Count('assessment_questions', distinct=True),
                 assignment_count=Count('assignments', distinct=True)
-            ).order_by(F('published_at').desc(nulls_last=True), '-created_at')
+            ).prefetch_related(*detail_prefetch).order_by(
+                F('published_at').desc(nulls_last=True), '-created_at'
+            )
         elif user.role == 'student':
             # Published open assessments are available to all students; targeted
             # assessments remain visible only to students with an assignment.
@@ -91,7 +112,9 @@ class AssessmentViewSet(viewsets.ModelViewSet):
             ).distinct().annotate(
                 question_count=Count('assessment_questions', distinct=True),
                 assignment_count=Count('assignments', distinct=True)
-            ).order_by(F('published_at').desc(nulls_last=True), '-created_at')
+            ).prefetch_related(*detail_prefetch).order_by(
+                F('published_at').desc(nulls_last=True), '-created_at'
+            )
 
         return Assessment.objects.none()
 
@@ -310,50 +333,102 @@ class AssessmentViewSet(viewsets.ModelViewSet):
     def statistics(self, request):
         """Get assessment statistics."""
         user = request.user
-        assessments = self.get_queryset()
-
         now = timezone.now()
-        published_assessments = assessments.filter(is_published=True)
-        active = published_assessments.filter(start_time__lte=now, end_time__gte=now).count()
-        upcoming = published_assessments.filter(start_time__gt=now).count()
-        completed = published_assessments.filter(end_time__lt=now).count()
-
-        # Assignment statistics
-        assignments = AssessmentAssignment.objects.filter(assessment__created_by=user)
-        completed_assignments = assignments.filter(
-            status__in=[AssessmentAssignment.Status.SUBMITTED, AssessmentAssignment.Status.GRADED]
-        ).count()
-        pending_assignments = assignments.filter(
-            status__in=[AssessmentAssignment.Status.ASSIGNED, AssessmentAssignment.Status.STARTED]
-        ).count()
-        submissions = CodeSubmission.objects.filter(assignment__assessment__created_by=user)
-        evaluated_submissions = submissions.filter(status=CodeSubmission.Status.COMPLETED)
-        completed_rows = evaluated_submissions.values_list(
-            'marks_obtained', 'question__marks'
+        assessments = Assessment.objects.filter(created_by=user)
+        assessment_stats = assessments.aggregate(
+            total=Count('id'),
+            active=Count(
+                'id',
+                filter=Q(
+                    is_published=True,
+                    start_time__lte=now,
+                    end_time__gte=now,
+                ),
+            ),
+            upcoming=Count(
+                'id',
+                filter=Q(is_published=True, start_time__gt=now),
+            ),
+            completed=Count(
+                'id',
+                filter=Q(is_published=True, end_time__lt=now),
+            ),
         )
-        percentages = [
-            marks * 100 / question_marks
-            for marks, question_marks in completed_rows
-            if marks is not None and question_marks
-        ]
-        avg_score = sum(percentages) / len(percentages) if percentages else 0
-        accepted_count = evaluated_submissions.filter(
-            verdict=CodeSubmission.Verdict.ACCEPTED
+
+        assignments = AssessmentAssignment.objects.filter(assessment__created_by=user)
+        assignment_stats = assignments.aggregate(
+            total=Count('id'),
+            completed=Count(
+                'id',
+                filter=Q(
+                    status__in=[
+                        AssessmentAssignment.Status.SUBMITTED,
+                        AssessmentAssignment.Status.GRADED,
+                    ]
+                ),
+            ),
+            pending=Count(
+                'id',
+                filter=Q(
+                    status__in=[
+                        AssessmentAssignment.Status.ASSIGNED,
+                        AssessmentAssignment.Status.STARTED,
+                    ]
+                ),
+            ),
+            students=Count('student_id', distinct=True),
+        )
+
+        total_questions = AssessmentQuestion.objects.filter(
+            assessment__created_by=user
         ).count()
-        acceptance_rate = accepted_count / evaluated_submissions.count() * 100 if evaluated_submissions.exists() else 0
+
+        submissions = CodeSubmission.objects.filter(
+            assignment__assessment__created_by=user
+        )
+        score_expression = ExpressionWrapper(
+            F('marks_obtained') * Value(100.0) / F('question__marks'),
+            output_field=FloatField(),
+        )
+        submission_stats = submissions.aggregate(
+            total=Count('id'),
+            completed=Count(
+                'id', filter=Q(status=CodeSubmission.Status.COMPLETED)
+            ),
+            accepted=Count(
+                'id',
+                filter=Q(
+                    status=CodeSubmission.Status.COMPLETED,
+                    verdict=CodeSubmission.Verdict.ACCEPTED,
+                ),
+            ),
+            average_score=Avg(
+                score_expression,
+                filter=Q(
+                    status=CodeSubmission.Status.COMPLETED,
+                    marks_obtained__isnull=False,
+                    question__marks__gt=0,
+                ),
+            ),
+        )
+        completed_count = submission_stats['completed'] or 0
+        acceptance_rate = (
+            submission_stats['accepted'] * 100 / completed_count
+            if completed_count else 0
+        )
 
         data = {
-            'total_assessments': assessments.count(),
-            'active_assessments': active,
-            'completed_assessments': completed,
-            'upcoming_assessments': upcoming,
-            'total_assignments': assignments.count(),
-            'completed_assignments': completed_assignments,
-            'pending_assignments': pending_assignments,
-            'total_students': assignments.values('student_id').distinct().count(),
-            'total_questions': sum(assessment.assessment_questions.count() for assessment in assessments),
-            'total_submissions': submissions.count(),
-            'average_score': avg_score,
+            'total_assessments': assessment_stats['total'],
+            'active_assessments': assessment_stats['active'],
+            'completed_assessments': assessment_stats['completed'],
+            'upcoming_assessments': assessment_stats['upcoming'],
+            'total_assignments': assignment_stats['total'],
+            'completed_assignments': assignment_stats['completed'],
+            'pending_assignments': assignment_stats['pending'],
+            'total_students': assignment_stats['students'],
+            'total_questions': total_questions,
+            'total_submissions': submission_stats['total'],
+            'average_score': submission_stats['average_score'] or 0,
             'acceptance_rate': acceptance_rate,
         }
 

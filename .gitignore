@@ -7,6 +7,7 @@
 **/secret/
 **/*service-account*.json
 **/*credentials*.json
+.aws/
 
 # Private keys and local TLS material.
 *.pem
@@ -48,6 +49,7 @@ local_settings.py
 *.sql
 *.sql.gz
 **/backups/
+DB_Backup/
 
 # Node, Vite, test, and generated frontend assets.
 node_modules/
@@ -78,3 +80,8 @@ logs/
 Thumbs.db
 .neon
 .env.local
+
+# Local Codex configuration and installed agent skills.
+/.agents/
+/.codex/
+/skills-lock.json

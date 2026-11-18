@@ -8,6 +8,7 @@ from django.db import transaction
 from django.utils import timezone
 from django.db.models import Q, Sum, Count
 from datetime import timedelta
+from uuid import uuid4
 
 from .models import (
     Assessment, AssessmentQuestion, StudentBatch,
@@ -256,21 +257,42 @@ class AssignmentService:
             ).values_list('id', flat=True).distinct()
             students_set.update(batch_students)
 
-        # Create assignments
-        assignments = []
-        for student_id in students_set:
-            assignment, created = AssessmentAssignment.objects.get_or_create(
+        if not students_set:
+            return []
+
+        existing_student_ids = set(
+            AssessmentAssignment.objects.filter(
+                assessment=assessment,
+                student_id__in=students_set,
+            ).values_list('student_id', flat=True)
+        )
+        new_student_ids = students_set - existing_student_ids
+        if not new_student_ids:
+            return []
+
+        assignments = [
+            AssessmentAssignment(
+                id=uuid4(),
                 assessment=assessment,
                 student_id=student_id,
-                defaults={
-                    'due_at': deadline,
-                    'created_by': assessment.created_by,
-                }
+                due_at=deadline,
+                created_by_id=assessment.created_by_id,
             )
-            if created:
-                assignments.append(assignment)
+            for student_id in new_student_ids
+        ]
+        AssessmentAssignment.objects.bulk_create(
+            assignments,
+            ignore_conflicts=True,
+        )
 
-        return assignments
+        # Use the generated IDs to return only rows inserted by this request.
+        # A concurrent request may have inserted another student's assignment
+        # after the existence check; that row must not be notified again.
+        created_ids = [assignment.id for assignment in assignments]
+        return list(
+            AssessmentAssignment.objects.filter(id__in=created_ids)
+            .select_related('student', 'assessment')
+        )
 
     @staticmethod
     def can_student_start(assignment):

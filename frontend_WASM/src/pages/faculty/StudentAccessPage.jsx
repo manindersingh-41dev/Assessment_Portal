@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { GraduationCap, LockKeyhole, RefreshCw, Search, UnlockKeyhole, Users } from 'lucide-react';
 import { Button } from '../../components/Button';
 import { Input } from '../../components/Input';
@@ -20,7 +20,15 @@ const formatLastLogin = (value) => {
 };
 
 const StudentAccessPage = () => {
+  const pageSize = 50;
   const [students, setStudents] = useState([]);
+  const [page, setPage] = useState(1);
+  const [pagination, setPagination] = useState({
+    count: 0,
+    next: null,
+    previous: null,
+    summary: {},
+  });
   const [search, setSearch] = useState('');
   const [lockFilter, setLockFilter] = useState('all');
   const [sortOrder, setSortOrder] = useState('name');
@@ -33,9 +41,23 @@ const StudentAccessPage = () => {
     setLoading(true);
     try {
       const response = await api.get(config.api.endpoints.users.studentsList, {
-        params: { include_summary: 'true' },
+        params: {
+          include_summary: 'true',
+          page,
+          page_size: pageSize,
+          search,
+          locked_only: lockFilter === 'locked' ? 'true' : undefined,
+          sort: sortOrder,
+        },
       });
-      setStudents(getList(response.data));
+      const data = response.data || {};
+      setStudents(getList(data));
+      setPagination({
+        count: data.count ?? getList(data).length,
+        next: data.next ?? null,
+        previous: data.previous ?? null,
+        summary: data.summary || {},
+      });
       setLoadError('');
     } catch (error) {
       const message = error.response?.data?.detail || 'Failed to load students.';
@@ -44,41 +66,17 @@ const StudentAccessPage = () => {
     } finally {
       setLoading(false);
     }
-  }, [addNotification]);
+  }, [addNotification, lockFilter, page, pageSize, search, sortOrder]);
 
   useEffect(() => {
-    loadStudents();
+    const timeout = window.setTimeout(loadStudents, search ? 250 : 0);
+    return () => window.clearTimeout(timeout);
   }, [loadStudents]);
 
-  const filteredStudents = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    const filtered = students.filter((student) => {
-      const name = `${student.first_name || ''} ${student.last_name || ''}`.trim().toLowerCase();
-      const searchable = [name, student.email, student.roll_number, student.department]
-        .some((value) => String(value || '').toLowerCase().includes(query));
-      const matchesLock = lockFilter !== 'locked' || student.login_locked;
-      return searchable && matchesLock;
-    });
-
-    return filtered.sort((left, right) => {
-      if (sortOrder === 'score_high') {
-        if (left.average_score == null) return 1;
-        if (right.average_score == null) return -1;
-        return Number(right.average_score) - Number(left.average_score);
-      }
-      if (sortOrder === 'score_low') {
-        if (left.average_score == null) return 1;
-        if (right.average_score == null) return -1;
-        return Number(left.average_score) - Number(right.average_score);
-      }
-      const leftName = `${left.first_name || ''} ${left.last_name || ''}`.trim();
-      const rightName = `${right.first_name || ''} ${right.last_name || ''}`.trim();
-      return leftName.localeCompare(rightName) || left.email.localeCompare(right.email);
-    });
-  }, [lockFilter, search, sortOrder, students]);
-
-  const lockedCount = students.filter((student) => student.login_locked).length;
-  const scoredStudentCount = students.filter((student) => student.graded_assessment_count > 0).length;
+  const filteredStudents = students;
+  const activeStudentCount = pagination.summary.active_students ?? pagination.count;
+  const lockedCount = pagination.summary.login_locked_students ?? 0;
+  const scoredStudentCount = pagination.summary.scored_students ?? 0;
 
   const clearLoginLock = async (student) => {
     const confirmed = window.confirm(
@@ -91,9 +89,31 @@ const StudentAccessPage = () => {
       const response = await api.post(
         config.api.endpoints.users.clearLoginLock(student.id)
       );
-      setStudents((current) => current.map((item) => (
-        item.id === student.id ? { ...item, login_locked: false } : item
-      )));
+      setStudents((current) => (
+        lockFilter === 'locked'
+          ? current.filter((item) => item.id !== student.id)
+          : current.map((item) => (
+            item.id === student.id ? { ...item, login_locked: false } : item
+          ))
+      ));
+      if (lockFilter === 'locked' && student.login_locked) {
+        setPagination((current) => ({
+          ...current,
+          count: Math.max(current.count - 1, 0),
+        }));
+      }
+      if (student.login_locked) {
+        setPagination((current) => ({
+          ...current,
+          summary: {
+            ...current.summary,
+            login_locked_students: Math.max(
+              (current.summary.login_locked_students || 0) - 1,
+              0,
+            ),
+          },
+        }));
+      }
       const clearedAttempts = response.data?.cleared_attempts ?? 0;
       const message = clearedAttempts
         ? `Cleared ${clearedAttempts} recent failed login attempt${clearedAttempts === 1 ? '' : 's'} for ${student.email}.`
@@ -133,7 +153,7 @@ const StudentAccessPage = () => {
       <div className="grid gap-3 sm:grid-cols-3">
         <Card className="flex items-center gap-3 p-4">
           <span className="rounded-lg bg-primary-50 p-2 text-primary-700 dark:bg-primary-950/50 dark:text-primary-300"><Users size={18} /></span>
-          <div><p className="text-xs text-slate-500">Active students</p><p className="text-xl font-bold text-slate-900 dark:text-white">{students.length}</p></div>
+          <div><p className="text-xs text-slate-500">Active students</p><p className="text-xl font-bold text-slate-900 dark:text-white">{activeStudentCount}</p></div>
         </Card>
         <Card className="flex items-center gap-3 p-4">
           <span className="rounded-lg bg-rose-50 p-2 text-rose-700 dark:bg-rose-950/50 dark:text-rose-300"><LockKeyhole size={18} /></span>
@@ -154,16 +174,25 @@ const StudentAccessPage = () => {
               placeholder="Search name, email, roll number, or department…"
               value={search}
               className="pl-9"
-              onChange={(event) => setSearch(event.target.value)}
+              onChange={(event) => {
+                setPage(1);
+                setSearch(event.target.value);
+              }}
             />
           </div>
           <Input as="select" aria-label="Filter students by login status" className="lg:max-w-48" value={lockFilter}
-            onChange={(event) => setLockFilter(event.target.value)}>
+            onChange={(event) => {
+              setPage(1);
+              setLockFilter(event.target.value);
+            }}>
             <option value="all">All students</option>
             <option value="locked">Login locked only</option>
           </Input>
           <Input as="select" aria-label="Sort students" className="lg:max-w-56" value={sortOrder}
-            onChange={(event) => setSortOrder(event.target.value)}>
+            onChange={(event) => {
+              setPage(1);
+              setSortOrder(event.target.value);
+            }}>
             <option value="name">Sort by name</option>
             <option value="score_high">Highest average score</option>
             <option value="score_low">Lowest average score</option>
@@ -171,7 +200,7 @@ const StudentAccessPage = () => {
         </div>
 
         <p className="mb-3 text-xs text-slate-500">
-          Showing {filteredStudents.length} of {students.length}. The average includes graded results and missed assessments as 0% after their deadline; upcoming and ungraded assessments are excluded.
+          Showing {filteredStudents.length} on this page, with {pagination.count} matching students. The average includes graded results and missed assessments as 0% after their deadline; upcoming and ungraded assessments are excluded.
         </p>
 
         {loading ? (
@@ -251,10 +280,14 @@ const StudentAccessPage = () => {
                   <tr>
                     <td colSpan="7" className="px-4 py-14 text-center">
                       <CardTitle className="text-base">
-                        {students.length ? 'No matching students' : 'No students available'}
+                        {pagination.count || search || lockFilter === 'locked'
+                          ? 'No matching students'
+                          : 'No students available'}
                       </CardTitle>
                       <CardDescription>
-                        {students.length ? 'Try another search, filter, or sort option.' : 'Registered active students will appear here.'}
+                        {pagination.count || search || lockFilter === 'locked'
+                          ? 'Try another search, filter, or sort option.'
+                          : 'Registered active students will appear here.'}
                       </CardDescription>
                     </td>
                   </tr>
@@ -263,6 +296,29 @@ const StudentAccessPage = () => {
             </table>
           </div>
         )}
+        <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-4 dark:border-slate-800">
+          <span className="text-xs text-slate-500">
+            Page {page} of {Math.max(1, Math.ceil(pagination.count / pageSize))}
+          </span>
+          <div className="flex gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={!pagination.previous || loading}
+              onClick={() => setPage((current) => Math.max(current - 1, 1))}
+            >
+              Previous
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={!pagination.next || loading}
+              onClick={() => setPage((current) => current + 1)}
+            >
+              Next
+            </Button>
+          </div>
+        </div>
       </Card>
     </div>
   );

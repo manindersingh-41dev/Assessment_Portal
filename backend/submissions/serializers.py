@@ -6,6 +6,7 @@ Handles validation and transformation for submission data.
 
 from rest_framework import serializers
 from django.utils import timezone
+from django.db.models import Case, F, TextField, Value, When
 
 from .models import CodeSubmission, TestCaseVerdict, ExecutionLog
 from .services import (
@@ -51,15 +52,62 @@ class TestCaseVerdictHiddenSerializer(serializers.ModelSerializer):
 
 def serialize_student_test_case_verdicts(submission):
     """Serialize visible output details and hidden pass/fail only."""
-    verdicts = submission.test_case_verdicts.all().order_by('test_case_order')
+    verdicts = submission.test_case_verdicts.all().annotate(
+        visible_expected_output=Case(
+            When(is_sample=True, then=F('expected_output')),
+            default=Value(None),
+            output_field=TextField(),
+        ),
+        visible_actual_output=Case(
+            When(is_sample=True, then=F('actual_output')),
+            default=Value(None),
+            output_field=TextField(),
+        ),
+        visible_error_message=Case(
+            When(is_sample=True, then=F('error_message')),
+            default=Value(None),
+            output_field=TextField(),
+        ),
+    ).values(
+        'id',
+        'test_case_order',
+        'is_sample',
+        'status',
+        'marks_obtained',
+        'execution_time_ms',
+        'memory_used_mb',
+        'visible_expected_output',
+        'visible_actual_output',
+        'visible_error_message',
+    ).order_by('test_case_order')
     results = []
+    status_labels = dict(TestCaseVerdict.Status.choices)
     for verdict in verdicts:
-        serializer_class = (
-            TestCaseVerdictSerializer
-            if verdict.is_sample
-            else TestCaseVerdictHiddenSerializer
-        )
-        results.append(serializer_class(verdict).data)
+        if not verdict['is_sample']:
+            passed = verdict['status'] == TestCaseVerdict.Status.ACCEPTED
+            results.append({
+                'test_case_order': verdict['test_case_order'],
+                'is_sample': False,
+                'status': 'accepted' if passed else 'failed',
+                'status_display': 'Passed' if passed else 'Failed',
+            })
+            continue
+
+        results.append({
+            'id': verdict['id'],
+            'test_case_order': verdict['test_case_order'],
+            'is_sample': True,
+            'status': verdict['status'],
+            'status_display': str(
+                status_labels.get(verdict['status'], verdict['status'])
+            ),
+            'marks_obtained': verdict['marks_obtained'],
+            'execution_time_ms': verdict['execution_time_ms'],
+            'memory_used_mb': verdict['memory_used_mb'],
+            'expected_output': verdict['visible_expected_output'],
+            'actual_output': verdict['visible_actual_output'],
+            'error_message': verdict['visible_error_message'],
+        })
     return results
 
 
@@ -110,6 +158,14 @@ class CodeSubmissionStatusSerializer(serializers.ModelSerializer):
         """Return a student-safe runtime error from a visible sample test case."""
         if obj.compilation_error:
             return obj.compilation_error
+        prefetched_verdicts = getattr(obj, "_prefetched_objects_cache", {}).get(
+            "test_case_verdicts"
+        )
+        if prefetched_verdicts is not None:
+            for verdict in prefetched_verdicts:
+                if verdict.error_message:
+                    return verdict.error_message
+            return None
         return obj.test_case_verdicts.filter(
             is_sample=True
         ).exclude(

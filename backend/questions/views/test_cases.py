@@ -1,6 +1,8 @@
 """Faculty-owned test-case CRUD endpoints."""
 
 from django.shortcuts import get_object_or_404
+from django.apps import apps
+from django.db.models import Count, Exists, OuterRef, Q
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -29,14 +31,26 @@ def question_test_cases(request, pk):
         return Response({"detail": "Faculty only."}, status=status.HTTP_403_FORBIDDEN)
 
     question = get_object_or_404(Question, pk=pk, created_by=request.user)
-    test_cases = question.test_cases.all()
+    verdict_model = apps.get_model("submissions", "TestCaseVerdict")
+    test_cases = question.test_cases.annotate(
+        has_results=Exists(
+            verdict_model.objects.filter(
+                submission__question__question_id=OuterRef("question_id"),
+                test_case_order=OuterRef("order"),
+            )
+        )
+    )
+    counts = test_cases.aggregate(
+        total=Count("id"),
+        samples=Count("id", filter=Q(is_sample=True)),
+    )
     return Response(
         {
             "question_id": str(question.id),
             "question_title": question.title,
-            "test_case_count": test_cases.count(),
-            "sample_count": test_cases.filter(is_sample=True).count(),
-            "hidden_count": test_cases.filter(is_sample=False).count(),
+            "test_case_count": counts["total"],
+            "sample_count": counts["samples"],
+            "hidden_count": counts["total"] - counts["samples"],
             "test_cases": TestCaseSerializer(
                 test_cases, many=True, context={"request": request}
             ).data,

@@ -11,6 +11,7 @@ from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
+from django.db.models import Count, Q
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 
@@ -97,10 +98,9 @@ class StudentSubmissionViewSet(viewsets.ViewSet):
         ).select_related('assessment', 'student').order_by('-submitted_at', '-created_at')
         paginator = self.pagination_class()
         page = paginator.paginate_queryset(assignments, request)
-        results = [
-            SubmissionAggregationService.get_assignment_scorecard(assignment)
-            for assignment in (page if page is not None else assignments)
-        ]
+        results = SubmissionAggregationService.get_assignment_scorecards(
+            page if page is not None else assignments
+        )
         return paginator.get_paginated_response(results)
 
     @action(detail=False, methods=['get'])
@@ -273,6 +273,11 @@ class FacultyResultViewSet(viewsets.ViewSet):
             student_id=student_id
         ).select_related(
             'assignment__assessment', 'question__question'
+        ).only(
+            'id', 'assignment_id', 'question_id', 'status', 'verdict',
+            'marks_obtained', 'total_test_cases', 'passed_test_cases',
+            'attempt_number', 'created_at', 'assignment__assessment__title',
+            'question__order', 'question__question__title',
         ).order_by('-created_at')
 
         paginator = self.pagination_class()
@@ -296,7 +301,9 @@ class FacultyResultViewSet(viewsets.ViewSet):
             )
 
         try:
-            submission = CodeSubmission.objects.get(id=submission_id)
+            submission = CodeSubmission.objects.select_related(
+                'student', 'assignment__assessment', 'question__question'
+            ).defer('client_test_cases_snapshot').get(id=submission_id)
 
             # Check authorization
             if submission.assignment.assessment.created_by != request.user:
@@ -312,7 +319,9 @@ class FacultyResultViewSet(viewsets.ViewSet):
             )
 
         # Get test case verdicts
-        verdicts = TestCaseVerdict.objects.filter(submission=submission).order_by('test_case_order')
+        verdicts = TestCaseVerdict.objects.filter(submission=submission).defer(
+            'expected_output'
+        ).order_by('test_case_order')
 
         verdict_data = []
         for verdict in verdicts:
@@ -357,17 +366,28 @@ class FacultyResultViewSet(viewsets.ViewSet):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        assignments = AssessmentAssignment.objects.filter(assessment=assessment).select_related(
-            'assessment', 'student'
+        assignments = list(
+            AssessmentAssignment.objects.filter(assessment=assessment).select_related(
+                'assessment', 'student'
+            )
         )
-        scorecards = [
-            SubmissionAggregationService.get_assignment_scorecard(assignment)
-            for assignment in assignments
-        ]
+        scorecards = SubmissionAggregationService.get_assignment_scorecards(assignments)
         submissions = CodeSubmission.objects.filter(assignment__assessment=assessment)
         evaluated = [row for row in scorecards if row['status'] == 'evaluated']
-        completed_submissions = submissions.filter(status=CodeSubmission.Status.COMPLETED)
-        accepted_submissions = completed_submissions.filter(verdict=CodeSubmission.Verdict.ACCEPTED).count()
+        submission_stats = submissions.aggregate(
+            total=Count('id'),
+            completed=Count(
+                'id', filter=Q(status=CodeSubmission.Status.COMPLETED)
+            ),
+            accepted=Count(
+                'id',
+                filter=Q(
+                    status=CodeSubmission.Status.COMPLETED,
+                    verdict=CodeSubmission.Verdict.ACCEPTED,
+                ),
+            ),
+        )
+        completed_count = submission_stats['completed'] or 0
         average_percentage = (
             sum(row['percentage'] for row in evaluated) / len(evaluated)
             if evaluated else 0
@@ -380,13 +400,14 @@ class FacultyResultViewSet(viewsets.ViewSet):
         return Response({
             'assessment_id': str(assessment.id),
             'assessment_title': assessment.title,
-            'total_students': assignments.count(),
+            'total_students': len(assignments),
             'evaluated': len(evaluated),
-            'pending': max(assignments.count() - len(evaluated), 0),
-            'total_submissions': submissions.count(),
-            'accepted_submissions': accepted_submissions,
-            'acceptance_rate': round(accepted_submissions * 100 / completed_submissions.count(), 2)
-            if completed_submissions.exists() else 0,
+            'pending': max(len(assignments) - len(evaluated), 0),
+            'total_submissions': submission_stats['total'],
+            'accepted_submissions': submission_stats['accepted'],
+            'acceptance_rate': round(
+                submission_stats['accepted'] * 100 / completed_count, 2
+            ) if completed_count else 0,
             'average_percentage': round(average_percentage, 2),
             'average_marks': round(average_marks, 2),
         })
@@ -414,14 +435,14 @@ class FacultyResultViewSet(viewsets.ViewSet):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        assignments = AssessmentAssignment.objects.filter(
+        assignments = list(AssessmentAssignment.objects.filter(
             assessment=assessment,
             status=AssessmentAssignment.Status.SUBMITTED,
-        ).select_related('assessment', 'student')
+        ).select_related('assessment', 'student'))
+        scorecards = SubmissionAggregationService.get_assignment_scorecards(assignments)
         evaluated = 0
         pending = 0
-        for assignment in assignments:
-            scorecard = SubmissionAggregationService.get_assignment_scorecard(assignment)
+        for assignment, scorecard in zip(assignments, scorecards):
             if scorecard['status'] == 'evaluated':
                 assignment.status = AssessmentAssignment.Status.GRADED
                 assignment.save(update_fields=['status', 'updated_at'])
@@ -463,9 +484,11 @@ class FacultyResultViewSet(viewsets.ViewSet):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        assignments = AssessmentAssignment.objects.filter(
+        assignments = list(AssessmentAssignment.objects.filter(
             assessment=assessment
-        ).select_related('assessment', 'student').order_by('student__last_name', 'student__first_name')
+        ).select_related('assessment', 'student').order_by(
+            'student__last_name', 'student__first_name'
+        ))
         question_links = assessment.assessment_questions.select_related('question').order_by('order')
         question_columns = {
             str(question.id): f"Q{question.order}: {question.question.title} ({question.marks})"
@@ -483,8 +506,8 @@ class FacultyResultViewSet(viewsets.ViewSet):
         output = StringIO()
         writer = csv.DictWriter(output, fieldnames=headers)
         writer.writeheader()
-        for assignment in assignments:
-            row = SubmissionAggregationService.get_assignment_scorecard(assignment)
+        scorecards = SubmissionAggregationService.get_assignment_scorecards(assignments)
+        for assignment, row in zip(assignments, scorecards):
             csv_row = {
                 'Student Name': assignment.student.get_full_name(),
                 'Student Email': assignment.student.email,
@@ -534,8 +557,5 @@ class FacultyResultViewSet(viewsets.ViewSet):
 
         paginator = self.pagination_class()
         page_assignments = paginator.paginate_queryset(assignments, request)
-        results = [
-            SubmissionAggregationService.get_assignment_scorecard(assignment)
-            for assignment in page_assignments
-        ]
+        results = SubmissionAggregationService.get_assignment_scorecards(page_assignments)
         return paginator.get_paginated_response(results)

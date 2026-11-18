@@ -5,6 +5,7 @@ Handles submission tracking, result calculation, and assessment evaluation.
 """
 
 import logging
+from collections import defaultdict
 from typing import Dict, List, Optional, Tuple
 from django.db import transaction
 from django.utils import timezone
@@ -436,33 +437,70 @@ class SubmissionAggregationService:
     @staticmethod
     def get_assignment_scorecard(assignment: AssessmentAssignment) -> Dict:
         """Aggregate each question's latest submission, regardless of its score."""
-        questions = list(
-            AssessmentQuestion.objects.filter(assessment=assignment.assessment)
+        return SubmissionAggregationService.get_assignment_scorecards([assignment])[0]
+
+    @staticmethod
+    def get_assignment_scorecards(assignments: List[AssessmentAssignment]) -> List[Dict]:
+        """Build scorecards with one narrow query per related table."""
+        assignments = list(assignments)
+        if not assignments:
+            return []
+
+        assignment_ids = [assignment.id for assignment in assignments]
+        assessment_ids = {assignment.assessment_id for assignment in assignments}
+
+        questions_by_assessment = defaultdict(list)
+        questions = (
+            AssessmentQuestion.objects.filter(assessment_id__in=assessment_ids)
             .select_related('question')
             .only(
                 'id', 'assessment_id', 'question_id', 'order', 'marks',
                 'created_at', 'question__title',
             )
-            .order_by('order', 'created_at')
+            .order_by('assessment_id', 'order', 'created_at')
         )
-        submissions = list(
-            CodeSubmission.objects.filter(assignment=assignment)
+        for question in questions:
+            questions_by_assessment[question.assessment_id].append(question)
+
+        submissions_by_assignment = defaultdict(lambda: defaultdict(list))
+        submissions = (
+            CodeSubmission.objects.filter(assignment_id__in=assignment_ids)
             .only(
-                'id', 'question_id', 'status', 'marks_obtained',
+                'id', 'assignment_id', 'question_id', 'status', 'marks_obtained',
                 'total_test_cases', 'passed_test_cases', 'attempt_number',
                 'created_at', 'updated_at', 'verdict', 'evaluation_generation',
             )
-            .order_by('attempt_number', 'created_at', 'id')
+            .order_by('assignment_id', 'attempt_number', 'created_at', 'id')
         )
-        submissions_by_question = {}
         for submission in submissions:
-            submissions_by_question.setdefault(str(submission.question_id), []).append(submission)
+            submissions_by_assignment[submission.assignment_id][
+                submission.question_id
+            ].append(submission)
+
+        now = timezone.now()
+        return [
+            SubmissionAggregationService._build_assignment_scorecard(
+                assignment,
+                questions_by_assessment[assignment.assessment_id],
+                submissions_by_assignment[assignment.id],
+                now,
+            )
+            for assignment in assignments
+        ]
+
+    @staticmethod
+    def _build_assignment_scorecard(
+        assignment: AssessmentAssignment,
+        questions: List[AssessmentQuestion],
+        submissions_by_question: Dict,
+        now,
+    ) -> Dict:
+        """Format one scorecard from preloaded question and submission rows."""
 
         question_results = []
         total_marks_obtained = 0
         total_test_cases = 0
         passed_test_cases = 0
-        now = timezone.now()
         has_pending_submissions = any(
             submission.status not in {CodeSubmission.Status.COMPLETED, CodeSubmission.Status.FAILED}
             for question_submissions in submissions_by_question.values()
@@ -472,7 +510,7 @@ class SubmissionAggregationService:
         failed_question_without_result = False
 
         for question in questions:
-            question_submissions = submissions_by_question.get(str(question.id), [])
+            question_submissions = submissions_by_question.get(question.id, [])
             latest_submission = question_submissions[-1] if question_submissions else None
             if not question_submissions:
                 missing_question_submission = True

@@ -16,6 +16,7 @@ from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.views import APIView
+from rest_framework.pagination import PageNumberPagination
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 from django.db import IntegrityError, transaction
@@ -23,6 +24,7 @@ from django.db.models import (
     Case,
     Count,
     ExpressionWrapper,
+    Exists,
     F,
     FloatField,
     IntegerField,
@@ -141,8 +143,19 @@ class StudentDirectorySerializer(serializers.ModelSerializer):
             return None
 
     def get_login_locked(self, student):
+        annotated_value = getattr(student, "login_locked", None)
+        if annotated_value is not None:
+            return annotated_value
         locked_emails = self.context.get("locked_emails", set())
         return student.email.lower() in locked_emails
+
+
+class StudentDirectoryPagination(PageNumberPagination):
+    """Bounded page size for the faculty student directory."""
+
+    page_size = 50
+    page_size_query_param = "page_size"
+    max_page_size = 100
 
 
 class StudentDirectoryView(APIView):
@@ -161,7 +174,26 @@ class StudentDirectoryView(APIView):
         students_query = User.objects.filter(
             role=User.ROLE_STUDENT,
             is_active=True,
-        ).order_by("last_name", "first_name", "email")
+        ).select_related("student_profile").order_by(
+            "last_name", "first_name", "email"
+        )
+        cutoff = timezone.now() - timedelta(
+            minutes=AuthenticationService.LOGIN_ATTEMPT_WINDOW
+        )
+        active_login_locks = (
+            LoginAttempt.objects.filter(
+                email__iexact=OuterRef("email"),
+                success=False,
+                attempted_at__gte=cutoff,
+            )
+            .order_by()
+            .values("email")
+            .annotate(attempt_count=Count("id"))
+            .filter(attempt_count__gte=AuthenticationService.MAX_LOGIN_ATTEMPTS)
+        )
+        students_query = students_query.annotate(
+            login_locked=Exists(active_login_locks)
+        )
         if include_summary:
             now = timezone.now()
             result_summary = (
@@ -221,8 +253,7 @@ class StudentDirectoryView(APIView):
                 .annotate(missed_count=Count("id"))
             )
             students_query = (
-                students_query.select_related("student_profile")
-                .annotate(
+                students_query.annotate(
                     total_score=Coalesce(
                         Subquery(
                             result_summary.values("total_score")[:1],
@@ -283,30 +314,85 @@ class StudentDirectoryView(APIView):
                     )
                 )
             )
-        students = list(students_query)
+        if "page" in request.query_params or "page_size" in request.query_params:
+            search = request.query_params.get("search", "").strip()
+            if search:
+                students_query = students_query.filter(
+                    Q(first_name__icontains=search)
+                    | Q(last_name__icontains=search)
+                    | Q(email__icontains=search)
+                    | Q(student_profile__roll_number__icontains=search)
+                    | Q(student_profile__department__icontains=search)
+                )
+            if request.query_params.get("locked_only") == "true":
+                students_query = students_query.filter(login_locked=True)
 
-        student_emails = {student.email.lower() for student in students}
-        cutoff = timezone.now() - timedelta(
-            minutes=AuthenticationService.LOGIN_ATTEMPT_WINDOW
-        )
-        failure_counts = (
-            LoginAttempt.objects.filter(success=False, attempted_at__gte=cutoff)
-            .values("email")
-            .annotate(attempt_count=Count("id"))
-            .filter(email__in=student_emails)
-        )
-        locked_emails = {
-            row["email"]
-            for row in failure_counts
-            if row["attempt_count"] >= AuthenticationService.MAX_LOGIN_ATTEMPTS
-        }
+            sort_order = request.query_params.get("sort", "name")
+            if include_summary and sort_order == "score_high":
+                students_query = students_query.order_by(
+                    F("average_score").desc(nulls_last=True),
+                    "last_name",
+                    "first_name",
+                    "email",
+                )
+            elif include_summary and sort_order == "score_low":
+                students_query = students_query.order_by(
+                    F("average_score").asc(nulls_last=True),
+                    "last_name",
+                    "first_name",
+                    "email",
+                )
+            else:
+                students_query = students_query.order_by(
+                    "first_name", "last_name", "email"
+                )
+
+            summary = {
+                "active_students": User.objects.filter(
+                    role=User.ROLE_STUDENT, is_active=True
+                ).count(),
+                "login_locked_students": User.objects.filter(
+                    role=User.ROLE_STUDENT,
+                    is_active=True,
+                ).annotate(
+                    login_locked=Exists(active_login_locks)
+                ).filter(login_locked=True).count(),
+                "scored_students": (
+                    User.objects.filter(
+                        role=User.ROLE_STUDENT,
+                        is_active=True,
+                    ).annotate(
+                        graded_assessment_count=Coalesce(
+                            Subquery(
+                                result_summary.values("graded_count")[:1],
+                                output_field=IntegerField(),
+                            ),
+                            Value(0),
+                            output_field=IntegerField(),
+                        )
+                    ).filter(graded_assessment_count__gt=0).count()
+                    if include_summary else 0
+                ),
+            }
+            paginator = StudentDirectoryPagination()
+            page = paginator.paginate_queryset(students_query, request, view=self)
+            response = paginator.get_paginated_response(
+                StudentDirectorySerializer(
+                    page,
+                    many=True,
+                    context={"include_summary": include_summary},
+                ).data
+            )
+            response.data["summary"] = summary
+            return response
+
+        students = list(students_query)
         return Response(
             StudentDirectorySerializer(
                 students,
                 many=True,
                 context={
                     "include_summary": include_summary,
-                    "locked_emails": locked_emails,
                 },
             ).data
         )

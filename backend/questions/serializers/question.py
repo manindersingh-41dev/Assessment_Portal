@@ -34,6 +34,9 @@ class TestCaseSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_has_results(self, obj):
+        annotated_value = getattr(obj, "has_results", None)
+        if annotated_value is not None:
+            return annotated_value
         return has_test_case_results(obj)
 
 

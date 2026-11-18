@@ -31,7 +31,14 @@ def question_list_create(request):
     """List questions (filtered to active for students) or create a new one."""
 
     if request.method == "GET":
-        queryset = Question.objects.select_related("created_by").all()
+        queryset = Question.objects.select_related("created_by").defer(
+            "input_format",
+            "output_format",
+            "constraints",
+            "sample_input",
+            "sample_output",
+            "sample_explanation",
+        )
         code_submission_model = apps.get_model("submissions", "CodeSubmission")
         # Faculty manage only their own questions; students only see active ones.
         if request.user.is_faculty():

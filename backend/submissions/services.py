@@ -8,6 +8,7 @@ import logging
 from datetime import timedelta
 from typing import Dict, List, Optional
 from django.db import transaction
+from django.db.models import Case, F, TextField, Value, When
 from django.utils import timezone
 
 from .models import CodeSubmission, TestCaseVerdict, ExecutionLog
@@ -39,12 +40,16 @@ class SubmissionService:
     @staticmethod
     def latest_submissions_by_question(assignment, question_ids=None):
         """Return the newest submission row for each assessment question."""
-        queryset = CodeSubmission.objects.filter(assignment=assignment)
+        queryset = CodeSubmission.objects.filter(assignment=assignment).defer(
+            "source_code", "client_test_cases_snapshot"
+        )
         if question_ids is not None:
             queryset = queryset.filter(question_id__in=question_ids)
 
         latest_by_question = {}
-        for submission in queryset.order_by("question_id", "-created_at", "-id"):
+        for submission in queryset.order_by(
+            "question_id", "-created_at", "-id"
+        ).distinct("question_id"):
             latest_by_question.setdefault(submission.question_id, submission)
         return latest_by_question
 
@@ -161,7 +166,7 @@ class SubmissionService:
             return None, f"Error creating submission: {str(e)}"
 
     @staticmethod
-    def get_submission_status(submission_id: str) -> Dict:
+    def get_submission_status(submission_id) -> Dict:
         """
         Get current status of a submission.
 
@@ -169,7 +174,13 @@ class SubmissionService:
             Dict with status information
         """
         try:
-            submission = CodeSubmission.objects.get(id=submission_id)
+            submission = (
+                submission_id
+                if isinstance(submission_id, CodeSubmission)
+                else CodeSubmission.objects.defer(
+                    "source_code", "client_test_cases_snapshot"
+                ).get(id=submission_id)
+            )
 
             status_data = {
                 "id": str(submission.id),
@@ -189,7 +200,7 @@ class SubmissionService:
 
             if submission.status == CodeSubmission.Status.COMPLETED:
                 result_data = SubmissionService.get_submission_result(
-                    submission_id,
+                    submission,
                     show_hidden=False,
                 )
                 status_data["test_case_verdicts"] = result_data.get(
@@ -203,7 +214,7 @@ class SubmissionService:
             return {"error": "Submission not found"}
 
     @staticmethod
-    def get_submission_result(submission_id: str, show_hidden: bool = False) -> Dict:
+    def get_submission_result(submission_id, show_hidden: bool = False) -> Dict:
         """
         Get detailed result of a submission.
 
@@ -215,7 +226,13 @@ class SubmissionService:
             Dict with result information
         """
         try:
-            submission = CodeSubmission.objects.get(id=submission_id)
+            submission = (
+                submission_id
+                if isinstance(submission_id, CodeSubmission)
+                else CodeSubmission.objects.defer(
+                    "source_code", "client_test_cases_snapshot"
+                ).get(id=submission_id)
+            )
 
             # Build result
             result = {
@@ -231,21 +248,9 @@ class SubmissionService:
             }
 
             # Get test case verdicts
-            verdicts = TestCaseVerdict.objects.filter(
-                submission=submission
-            ).order_by("test_case_order")
-
-            for verdict in verdicts:
-                # Don't show details of hidden test cases to students
-                if not show_hidden and not verdict.is_sample:
-                    passed = verdict.status == TestCaseVerdict.Status.ACCEPTED
-                    verdict_info = {
-                        "test_case_order": verdict.test_case_order,
-                        "is_sample": False,
-                        "status": "accepted" if passed else "failed",
-                        "status_display": "Passed" if passed else "Failed",
-                    }
-                else:
+            verdicts = TestCaseVerdict.objects.filter(submission=submission)
+            if show_hidden:
+                for verdict in verdicts.order_by("test_case_order"):
                     verdict_info = {
                         "test_case_order": verdict.test_case_order,
                         "is_sample": verdict.is_sample,
@@ -257,8 +262,58 @@ class SubmissionService:
                         "actual_output": verdict.actual_output,
                         "error_message": verdict.error_message,
                     }
+                    result["test_case_verdicts"].append(verdict_info)
+            else:
+                visible_verdicts = verdicts.annotate(
+                    visible_expected_output=Case(
+                        When(is_sample=True, then=F("expected_output")),
+                        default=Value(None),
+                        output_field=TextField(),
+                    ),
+                    visible_actual_output=Case(
+                        When(is_sample=True, then=F("actual_output")),
+                        default=Value(None),
+                        output_field=TextField(),
+                    ),
+                    visible_error_message=Case(
+                        When(is_sample=True, then=F("error_message")),
+                        default=Value(None),
+                        output_field=TextField(),
+                    ),
+                ).values(
+                    "test_case_order",
+                    "is_sample",
+                    "status",
+                    "marks_obtained",
+                    "execution_time_ms",
+                    "memory_used_mb",
+                    "visible_expected_output",
+                    "visible_actual_output",
+                    "visible_error_message",
+                ).order_by("test_case_order")
 
-                result["test_case_verdicts"].append(verdict_info)
+                for verdict in visible_verdicts:
+                    if not verdict["is_sample"]:
+                        passed = verdict["status"] == TestCaseVerdict.Status.ACCEPTED
+                        verdict_info = {
+                            "test_case_order": verdict["test_case_order"],
+                            "is_sample": False,
+                            "status": "accepted" if passed else "failed",
+                            "status_display": "Passed" if passed else "Failed",
+                        }
+                    else:
+                        verdict_info = {
+                            "test_case_order": verdict["test_case_order"],
+                            "is_sample": True,
+                            "status": verdict["status"],
+                            "marks_obtained": verdict["marks_obtained"],
+                            "execution_time_ms": verdict["execution_time_ms"],
+                            "memory_used_mb": verdict["memory_used_mb"],
+                            "expected_output": verdict["visible_expected_output"],
+                            "actual_output": verdict["visible_actual_output"],
+                            "error_message": verdict["visible_error_message"],
+                        }
+                    result["test_case_verdicts"].append(verdict_info)
 
             return result
 

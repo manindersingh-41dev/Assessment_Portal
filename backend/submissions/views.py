@@ -13,7 +13,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from django.conf import settings
-from django.db.models import Prefetch
+from django.db.models import Avg, Count, Prefetch, Q
 from django.shortcuts import get_object_or_404
 
 from assessments.models import AssessmentAssignment, AssessmentQuestion
@@ -363,8 +363,10 @@ class CodeSubmissionViewSet(viewsets.ReadOnlyModelViewSet):
         user = self.request.user
 
         if user.role == 'student':
-            return CodeSubmission.objects.filter(student=user).select_related(
+            queryset = CodeSubmission.objects.filter(student=user).select_related(
                 'question__question'
+            ).defer(
+                'client_test_cases_snapshot'
             ).prefetch_related(
                 Prefetch(
                     'test_case_verdicts',
@@ -375,6 +377,9 @@ class CodeSubmissionViewSet(viewsets.ReadOnlyModelViewSet):
                     ).order_by('test_case_order'),
                 )
             ).order_by('-created_at')
+            if self.action in {'status', 'result', 'execution_log'}:
+                queryset = queryset.defer('source_code')
+            return queryset
 
         return CodeSubmission.objects.none()
 
@@ -537,7 +542,11 @@ class SubmissionStatusView(viewsets.ViewSet):
             )
 
         try:
-            submission = CodeSubmission.objects.get(id=submission_id)
+            submission = CodeSubmission.objects.select_related(
+                'student', 'assignment__assessment'
+            ).defer(
+                'source_code', 'client_test_cases_snapshot'
+            ).get(id=submission_id)
 
             # Check permission
             if submission.student != request.user and request.user.role != 'faculty':
@@ -554,7 +563,7 @@ class SubmissionStatusView(viewsets.ViewSet):
                         status=status.HTTP_403_FORBIDDEN
                     )
 
-            status_data = SubmissionService.get_submission_status(submission_id)
+            status_data = SubmissionService.get_submission_status(submission)
             return Response(status_data)
 
         except CodeSubmission.DoesNotExist:
@@ -577,7 +586,9 @@ class SubmissionStatusView(viewsets.ViewSet):
             )
 
         try:
-            submission = CodeSubmission.objects.get(id=submission_id)
+            submission = CodeSubmission.objects.select_related('student').defer(
+                'source_code', 'client_test_cases_snapshot'
+            ).get(id=submission_id)
 
             # Check permission
             if submission.student != request.user:
@@ -594,7 +605,7 @@ class SubmissionStatusView(viewsets.ViewSet):
                 )
 
             result_data = SubmissionService.get_submission_result(
-                submission_id,
+                submission,
                 show_hidden=False  # Never show hidden test details to students
             )
 
@@ -637,7 +648,7 @@ class SubmissionListView(viewsets.ViewSet):
                     'submission_id', 'is_sample', 'error_message', 'test_case_order'
                 ).order_by('test_case_order'),
             )
-        ).order_by('-created_at')
+        ).defer('client_test_cases_snapshot').order_by('-created_at')
 
         paginator = self.pagination_class()
         page = paginator.paginate_queryset(submissions, request)
@@ -665,7 +676,9 @@ class SubmissionListView(viewsets.ViewSet):
         from assessments.models import AssessmentAssignment
 
         try:
-            assignment = AssessmentAssignment.objects.get(id=assignment_id)
+            assignment = AssessmentAssignment.objects.select_related(
+                'student', 'assessment__created_by'
+            ).get(id=assignment_id)
 
             if request.user.role == 'student':
                 if assignment.student != request.user:
@@ -692,7 +705,9 @@ class SubmissionListView(viewsets.ViewSet):
             ).distinct('question_id').values('id')
             submissions = CodeSubmission.objects.filter(
                 id__in=latest_submission_ids
-            ).select_related('question__question').prefetch_related(
+            ).select_related('question__question').defer(
+                'client_test_cases_snapshot'
+            ).prefetch_related(
                 Prefetch(
                     'test_case_verdicts',
                     queryset=TestCaseVerdict.objects.filter(is_sample=True).exclude(
@@ -732,34 +747,33 @@ class SubmissionListView(viewsets.ViewSet):
                 status=status.HTTP_403_FORBIDDEN
             )
 
-        from django.db.models import Count, Avg
-
         submissions = CodeSubmission.objects.filter(student=request.user)
-
-        stats = {
-            'total_submissions': submissions.count(),
-            'pending_submissions': submissions.filter(
-                status=CodeSubmission.Status.PENDING
-            ).count(),
-            'completed_submissions': submissions.filter(
-                status=CodeSubmission.Status.COMPLETED
-            ).count(),
-            'accepted_submissions': submissions.filter(
-                verdict=CodeSubmission.Verdict.ACCEPTED
-            ).count(),
-            'average_marks': submissions.filter(
-                marks_obtained__isnull=False
-            ).aggregate(avg=Avg('marks_obtained'))['avg'] or 0,
-            'success_rate': (
-                submissions.filter(verdict=CodeSubmission.Verdict.ACCEPTED).count() /
-                submissions.count() * 100 if submissions.count() > 0 else 0
+        aggregated = submissions.aggregate(
+            total=Count('id'),
+            pending=Count('id', filter=Q(status=CodeSubmission.Status.PENDING)),
+            completed=Count('id', filter=Q(status=CodeSubmission.Status.COMPLETED)),
+            accepted=Count('id', filter=Q(verdict=CodeSubmission.Verdict.ACCEPTED)),
+            average_marks=Avg('marks_obtained'),
+            compilation_errors=Count(
+                'id', filter=Q(verdict=CodeSubmission.Verdict.COMPILATION_ERROR)
             ),
-            'compilation_errors': submissions.filter(
-                verdict=CodeSubmission.Verdict.COMPILATION_ERROR
-            ).count(),
-            'runtime_errors': submissions.filter(
-                verdict=CodeSubmission.Verdict.RUNTIME_ERROR
-            ).count(),
+            runtime_errors=Count(
+                'id', filter=Q(verdict=CodeSubmission.Verdict.RUNTIME_ERROR)
+            ),
+        )
+        total_submissions = aggregated['total'] or 0
+        stats = {
+            'total_submissions': total_submissions,
+            'pending_submissions': aggregated['pending'],
+            'completed_submissions': aggregated['completed'],
+            'accepted_submissions': aggregated['accepted'],
+            'average_marks': aggregated['average_marks'] or 0,
+            'success_rate': (
+                aggregated['accepted'] * 100 / total_submissions
+                if total_submissions else 0
+            ),
+            'compilation_errors': aggregated['compilation_errors'],
+            'runtime_errors': aggregated['runtime_errors'],
         }
 
         serializer = SubmissionStatsSerializer(stats)
