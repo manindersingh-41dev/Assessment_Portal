@@ -126,13 +126,22 @@ const AssessmentDetailsPage = () => {
   };
 
   const handleReopenWindow = async () => {
-    if (!window.confirm('Reopen this assessment for 24 hours so pending students can finish and submit?')) return;
+    if (!window.confirm(
+      'Reopen this assessment for all students for 24 hours? Existing drafts and submitted questions will be kept, and students can continue or resubmit questions. Students with timed attempts will receive a fresh timer.',
+    )) return;
     setReopeningWindow(true);
     try {
       const response = await api.post(endpoints.assessments.reopenWindow(id));
       const newEnd = response.data?.end_datetime;
-      setAssessment((current) => ({ ...current, end_datetime: newEnd, end_time: newEnd, status: 'active' }));
-      addNotification('Assessment reopened for 24 hours.', 'success');
+      setAssessment((current) => ({
+        ...current,
+        end_datetime: newEnd,
+        end_time: newEnd,
+        status: 'active',
+        is_published: true,
+        is_open_to_all_students: true,
+      }));
+      addNotification('Assessment reopened for all students for 24 hours.', 'success');
       await fetchAssessment();
     } catch (error) {
       addNotification(error.response?.data?.error || 'Could not reopen this assessment.', 'error');
@@ -310,7 +319,8 @@ const AssessmentDetailsPage = () => {
                     <p className="mt-0.5 truncate text-xs text-slate-500">{assignment.student_email || assignment.student.email}</p>
                   )}
                   <div className="mt-2"><Badge variant={assignment.status === 'submitted' || assignment.status === 'graded' ? 'success' : 'neutral'}>{assignment.status || 'assigned'}</Badge></div>
-                  {(assignment.status === 'submitted' || assignment.status === 'graded') && (
+                  {new Date(assessment.end_time || assessment.end_datetime) >= new Date()
+                    && (assignment.status === 'submitted' || assignment.status === 'graded') && (
                     <Button
                       className="mt-2"
                       size="sm"

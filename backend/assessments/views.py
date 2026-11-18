@@ -224,7 +224,7 @@ class AssessmentViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='reopen-window')
     @transaction.atomic
     def reopen_window(self, request, pk=None):
-        """Extend an expired assessment window by 24 hours for pending students."""
+        """Reopen an expired assessment for all students for another 24 hours."""
         assessment = self.get_object()
         now = timezone.now()
         if assessment.end_time >= now:
@@ -236,16 +236,61 @@ class AssessmentViewSet(viewsets.ModelViewSet):
         new_end = now + timedelta(hours=24)
         assessment.end_time = new_end
         assessment.status = Assessment.Status.ACTIVE
-        assessment.save(update_fields=['end_time', 'status', 'updated_at'])
-        # Custom assignment deadlines must also move, otherwise they would
-        # continue blocking students despite the assessment window being open.
-        assessment.assignments.filter(
-            status__in=[AssessmentAssignment.Status.ASSIGNED, AssessmentAssignment.Status.STARTED],
-            due_at__isnull=False,
-        ).update(due_at=new_end, updated_at=now)
+        assessment.is_published = True
+        assessment.is_open_to_all_students = True
+        if assessment.published_at is None:
+            assessment.published_at = now
+        assessment.save(update_fields=[
+            'end_time',
+            'status',
+            'is_published',
+            'is_open_to_all_students',
+            'published_at',
+            'updated_at',
+        ])
+
+        assignments = assessment.assignments.all()
+        # A new global end time must override old personal deadlines too.
+        assignments.update(due_at=new_end, updated_at=now)
+
+        # Resume in-progress and completed attempts without deleting their
+        # question submissions or drafts. Resetting started_at gives timed
+        # attempts a fresh clock within the new 24-hour assessment window.
+        resumable_statuses = [
+            AssessmentAssignment.Status.STARTED,
+            AssessmentAssignment.Status.SUBMITTED,
+            AssessmentAssignment.Status.GRADED,
+        ]
+        assignments.filter(status__in=resumable_statuses).update(
+            status=AssessmentAssignment.Status.STARTED,
+            started_at=now,
+            submitted_at=None,
+            updated_at=now,
+        )
+        assignments.filter(
+            status=AssessmentAssignment.Status.EXPIRED,
+            started_at__isnull=False,
+        ).update(
+            status=AssessmentAssignment.Status.STARTED,
+            started_at=now,
+            submitted_at=None,
+            updated_at=now,
+        )
+        # Expired assignments with no recorded start have no attempt to resume;
+        # return them to the normal assigned state so the student can start.
+        assignments.filter(
+            status=AssessmentAssignment.Status.EXPIRED,
+            started_at__isnull=True,
+        ).update(
+            status=AssessmentAssignment.Status.ASSIGNED,
+            submitted_at=None,
+            updated_at=now,
+        )
         return Response({
-            'message': 'Assessment reopened for 24 hours.',
+            'message': 'Assessment reopened for all students for 24 hours.',
             'end_datetime': new_end,
+            'is_published': True,
+            'is_open_to_all_students': True,
         })
 
     @action(detail=True, methods=['post'])
@@ -635,6 +680,12 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
                 {'error': 'You can only reopen assignments for your assessments.'},
                 status=status.HTTP_403_FORBIDDEN,
             )
+        now = timezone.now()
+        if assignment.assessment.end_time <= now:
+            return Response(
+                {'error': 'The assessment window is closed. Reopen the assessment window to make it available to all students.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         if assignment.status not in [
             AssessmentAssignment.Status.SUBMITTED,
             AssessmentAssignment.Status.GRADED,
@@ -645,9 +696,16 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
             )
 
         assignment.status = AssessmentAssignment.Status.STARTED
-        assignment.started_at = timezone.now()
+        assignment.started_at = now
         assignment.submitted_at = None
-        assignment.save(update_fields=['status', 'started_at', 'submitted_at', 'updated_at'])
+        assignment.due_at = assignment.assessment.end_time
+        assignment.save(update_fields=[
+            'status',
+            'started_at',
+            'submitted_at',
+            'due_at',
+            'updated_at',
+        ])
         return Response({
             'message': 'Assessment reopened for the student.',
             'assignment': AssessmentAssignmentSerializer(
