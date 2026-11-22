@@ -1108,6 +1108,7 @@ const AssessmentAttemptPage = () => {
           Number(latestAssignment.integrity_warning_count) || 0,
         ));
         if (!latestAssignment.is_flagged_cheating) {
+          setIntegrityWarningCount(Number(latestAssignment.integrity_warning_count) || 0);
           cheatingFlagRequestRef.current = false;
           codeInsertionSamplesRef.current = [];
           highSpeedStartedAtRef.current = null;

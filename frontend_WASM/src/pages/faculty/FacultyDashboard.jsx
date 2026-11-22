@@ -86,7 +86,7 @@ const FacultyDashboard = () => {
     try {
       await api.post(config.api.endpoints.assessments.clearCheatingFlag(assignmentId));
       setLockedAssignments((current) => current.filter((assignment) => assignment.id !== assignmentId));
-      addNotification('Student coding lock removed.', 'success');
+      addNotification('Student coding lock removed and warning count reset to zero.', 'success');
     } catch (errorDetails) {
       addNotification(errorDetails.response?.data?.error || 'Could not remove the coding lock.', 'error');
     } finally {

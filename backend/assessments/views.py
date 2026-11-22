@@ -768,21 +768,37 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        assignment = self.get_object()
+        visible_assignment = self.get_object()
+        lock_cleared = False
+        with transaction.atomic():
+            student = User.objects.select_for_update().get(pk=visible_assignment.student_id)
+            assignment = AssessmentAssignment.objects.select_for_update().select_related(
+                'assessment'
+            ).get(pk=visible_assignment.pk)
 
-        if assignment.is_flagged_cheating:
-            assignment.is_flagged_cheating = False
-            assignment.cheating_flag_cleared_at = timezone.now()
-            assignment.cheating_flag_cleared_by = request.user
-            assignment.save(update_fields=[
-                'is_flagged_cheating',
-                'cheating_flag_cleared_at',
-                'cheating_flag_cleared_by',
-                'updated_at',
-            ])
+            if assignment.is_flagged_cheating:
+                lock_cleared = True
+                assignment.is_flagged_cheating = False
+                assignment.cheating_flag_cleared_at = timezone.now()
+                assignment.cheating_flag_cleared_by = request.user
+                assignment.save(update_fields=[
+                    'is_flagged_cheating',
+                    'cheating_flag_cleared_at',
+                    'cheating_flag_cleared_by',
+                    'updated_at',
+                ])
+                if student.integrity_warning_count:
+                    student.integrity_warning_count = 0
+                    student.save(update_fields=['integrity_warning_count', 'updated_at'])
+
+            assignment.student = student
 
         return Response({
-            'message': 'The coding lock has been removed.',
+            'message': (
+                'The coding lock has been removed and the student warning count reset to zero.'
+                if lock_cleared
+                else 'No active coding lock was found.'
+            ),
             'assignment': AssessmentAssignmentSerializer(
                 assignment,
                 context={'request': request},

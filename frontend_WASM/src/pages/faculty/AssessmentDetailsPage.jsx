@@ -173,7 +173,7 @@ const AssessmentDetailsPage = () => {
           item.id === assignmentId ? { ...item, ...updatedAssignment } : item
         )));
       }
-      addNotification('Student coding lock removed.', 'success');
+      addNotification('Student coding lock removed and warning count reset to zero.', 'success');
     } catch (error) {
       addNotification(error.response?.data?.error || 'Could not remove the coding lock.', 'error');
     } finally {
