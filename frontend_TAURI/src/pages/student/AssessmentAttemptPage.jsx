@@ -33,7 +33,7 @@ const CODE_SPEED_SUSTAIN_MS = 3_000;
 const CODE_SPEED_GAP_TOLERANCE_MS = 750;
 const CHARACTERS_PER_WORD = 5;
 const MAX_INTEGRITY_WARNINGS = 5;
-const INTENTIONAL_EXIT_EVENT_GRACE_MS = 3_000;
+const EXIT_EVENT_SUPPRESSION_MS = 3_000;
 
 const createSpeedBreachEventId = () => {
   if (window.crypto?.randomUUID) return window.crypto.randomUUID();
@@ -238,7 +238,7 @@ const AssessmentAttemptPage = () => {
   const lastObservedFullscreenRef = useRef(null);
   const reportPageIntegrityEventRef = useRef(null);
   const intentionalExitRef = useRef(false);
-  const escapePressedAtRef = useRef(0);
+  const exitEventSuppressedAtRef = useRef(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isMobileKeyboardOpen, setIsMobileKeyboardOpen] = useState(false);
   const [visualViewportHeight, setVisualViewportHeight] = useState(0);
@@ -609,7 +609,7 @@ const AssessmentAttemptPage = () => {
       lastPageIntegrityWarningAtRef.current = 0;
       lastObservedFullscreenRef.current = null;
       intentionalExitRef.current = false;
-      escapePressedAtRef.current = 0;
+      exitEventSuppressedAtRef.current = 0;
       highSpeedStartedAtRef.current = null;
       lastHighSpeedObservationAtRef.current = null;
       autoSubmitTriggeredRef.current = false;
@@ -1014,9 +1014,8 @@ const AssessmentAttemptPage = () => {
       setIsFullscreen(fullscreen);
       const previousFullscreen = lastObservedFullscreenRef.current;
       lastObservedFullscreenRef.current = fullscreen;
-      const recentEscape = Date.now() - escapePressedAtRef.current < INTENTIONAL_EXIT_EVENT_GRACE_MS;
-      if (previousFullscreen === true && !fullscreen && !intentionalExitRef.current && !recentEscape) {
-        reportPageIntegrityEventRef.current?.('fullscreen_exit');
+      if (previousFullscreen === true && !fullscreen) {
+        exitEventSuppressedAtRef.current = Date.now();
       }
       return fullscreen;
     };
@@ -1029,6 +1028,14 @@ const AssessmentAttemptPage = () => {
     };
     const onWindowBlur = () => {
       if (document.visibilityState === 'hidden') return;
+      if (
+        lastObservedFullscreenRef.current === true
+        && !getTauriWindow()
+        && document.fullscreenElement !== attemptRootRef.current
+      ) {
+        exitEventSuppressedAtRef.current = Date.now();
+        return;
+      }
       reportPageIntegrityEventRef.current?.('window_blur');
     };
     const onFullscreenChange = () => { void syncFullscreen(); };
@@ -1044,7 +1051,7 @@ const AssessmentAttemptPage = () => {
     const onKeyDown = (event) => {
       const key = event.key.toLowerCase();
       if (key === 'escape' && assignment?.status === 'started') {
-        escapePressedAtRef.current = Date.now();
+        exitEventSuppressedAtRef.current = Date.now();
       }
       const clipboardShortcut = ((event.ctrlKey || event.metaKey) && ['c', 'v', 'x'].includes(key))
         || (event.ctrlKey && key === 'insert')
@@ -1143,6 +1150,10 @@ const AssessmentAttemptPage = () => {
       event_id: eventId,
     }).then((response) => {
       const result = response.data || {};
+      if (result.ignored) {
+        setCheatingFlagSyncStatus(cheatingFlagRequestRef.current ? 'saved' : '');
+        return;
+      }
       const savedAssignment = result.assignment;
       if (
         eventType === 'high_code_writing_speed'
@@ -1211,7 +1222,7 @@ const AssessmentAttemptPage = () => {
       || finalized
       || cheatingFlagRequestRef.current
       || intentionalExitRef.current
-      || Date.now() - escapePressedAtRef.current < INTENTIONAL_EXIT_EVENT_GRACE_MS
+      || Date.now() - exitEventSuppressedAtRef.current < EXIT_EVENT_SUPPRESSION_MS
     ) return;
     const now = Date.now();
     if (now - lastPageIntegrityWarningAtRef.current < 3_000) return;
@@ -1555,7 +1566,7 @@ const AssessmentAttemptPage = () => {
         <>
       <header className={`z-10 flex min-h-16 shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-800 bg-slate-900 px-3 py-2 sm:px-5 ${isMobileKeyboardOpen ? 'hidden' : ''}`}>
         <div className="flex min-w-0 items-center gap-3">
-          <Button size="sm" variant="ghost" aria-label="Leave assessment" disabled={assignment.status === 'started' && !finalized} onClick={() => setShowExitConfirm(true)}>
+          <Button size="sm" variant="ghost" aria-label="Leave assessment" disabled={startingAttempt} onClick={() => setShowExitConfirm(true)}>
             <ArrowLeft size={17} />
           </Button>
           <div className="min-w-0">
@@ -1599,11 +1610,14 @@ const AssessmentAttemptPage = () => {
       </Modal>
 
       {assignment.status === 'started' && !isFullscreen && !finalized && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/95 p-6" role="alertdialog" aria-modal="true" aria-labelledby="fullscreen-required-title">
+        <div className="fixed inset-0 z-[40] flex items-center justify-center bg-slate-950/95 p-6" role="alertdialog" aria-modal="true" aria-labelledby="fullscreen-required-title">
           <div className="max-w-md space-y-4 rounded-2xl border border-slate-700 bg-slate-900 p-6 text-center shadow-2xl">
-            <h2 id="fullscreen-required-title" className="text-xl font-bold text-white">Return to fullscreen</h2>
-            <p className="text-sm leading-6 text-slate-300">The assessment stays in progress, but coding and submission are paused until fullscreen is restored.</p>
-            <Button onClick={enterFullscreen}>Return to fullscreen</Button>
+            <h2 id="fullscreen-required-title" className="text-xl font-bold text-white">Fullscreen ended</h2>
+            <p className="text-sm leading-6 text-slate-300">You can return to fullscreen or leave the attempt. Your work is autosaved; the timer continues while you are away.</p>
+            <div className="flex flex-wrap justify-center gap-3">
+              <Button variant="secondary" onClick={exitAttempt}>Leave attempt</Button>
+              <Button onClick={enterFullscreen}>Return to fullscreen</Button>
+            </div>
           </div>
         </div>
       )}
@@ -1627,6 +1641,7 @@ const AssessmentAttemptPage = () => {
             {cheatingFlagSyncStatus === 'failed' && (
               <p className="text-xs text-amber-200">The flag could not be saved to the server. Contact faculty before leaving this screen.</p>
             )}
+            <Button variant="secondary" onClick={exitAttempt}>Leave attempt</Button>
           </div>
         </div>
       )}

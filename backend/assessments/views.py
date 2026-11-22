@@ -645,6 +645,20 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
                 )
         else:
             event_id = uuid.uuid4()
+        if event_type == AssessmentIntegrityEvent.EventType.FULLSCREEN_EXIT:
+            return Response({
+                'event_id': str(event_id),
+                'event_type': event_type,
+                'outcome': None,
+                'locked': assignment.is_flagged_cheating,
+                'ignored': True,
+                'integrity_warning_count': request.user.integrity_warning_count,
+                'message': 'Leaving fullscreen does not create an integrity warning.',
+                'assignment': AssessmentAssignmentSerializer(
+                    assignment,
+                    context={'request': request},
+                ).data,
+            })
         if event_type == AssessmentIntegrityEvent.EventType.SPEED:
             if not math.isfinite(speed_wpm) or speed_wpm <= 85:
                 return Response(
