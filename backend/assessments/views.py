@@ -653,7 +653,6 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
                 'locked': assignment.is_flagged_cheating,
                 'ignored': True,
                 'integrity_warning_count': request.user.integrity_warning_count,
-                'message': 'Leaving fullscreen does not create an integrity warning.',
                 'assignment': AssessmentAssignmentSerializer(
                     assignment,
                     context={'request': request},

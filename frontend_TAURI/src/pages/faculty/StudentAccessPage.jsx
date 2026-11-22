@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { GraduationCap, LockKeyhole, RefreshCw, Search, UnlockKeyhole, Users } from 'lucide-react';
+import { GraduationCap, LockKeyhole, RefreshCw, Search, ShieldAlert, UnlockKeyhole, Users } from 'lucide-react';
 import { Button } from '../../components/Button';
 import { Input } from '../../components/Input';
 import { Alert, Badge, Card, CardDescription, CardTitle } from '../../components/Common';
@@ -21,21 +21,35 @@ const formatLastLogin = (value) => {
 
 const StudentAccessPage = () => {
   const [students, setStudents] = useState([]);
+  const [lockedAssignments, setLockedAssignments] = useState([]);
   const [search, setSearch] = useState('');
   const [lockFilter, setLockFilter] = useState('all');
   const [sortOrder, setSortOrder] = useState('name');
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [pendingStudentId, setPendingStudentId] = useState(null);
+  const [pendingCodingLockId, setPendingCodingLockId] = useState(null);
   const addNotification = useNotificationStore((state) => state.addNotification);
 
   const loadStudents = useCallback(async () => {
     setLoading(true);
     try {
-      const response = await api.get(config.api.endpoints.users.studentsList, {
-        params: { include_summary: 'true' },
-      });
-      setStudents(getList(response.data));
+      const [studentsResult, lockedAssignmentsResult] = await Promise.allSettled([
+        api.get(config.api.endpoints.users.studentsList, {
+          params: { include_summary: 'true' },
+        }),
+        api.get(config.api.endpoints.assessments.lockedAssignments, {
+          params: { page_size: 100 },
+        }),
+      ]);
+      if (studentsResult.status === 'rejected') throw studentsResult.reason;
+      setStudents(getList(studentsResult.value.data));
+      if (lockedAssignmentsResult.status === 'fulfilled') {
+        setLockedAssignments(getList(lockedAssignmentsResult.value.data));
+      } else {
+        setLockedAssignments([]);
+        addNotification('Locked assessment sessions could not be loaded.', 'warning');
+      }
       setLoadError('');
     } catch (error) {
       const message = error.response?.data?.detail || 'Failed to load students.';
@@ -107,6 +121,19 @@ const StudentAccessPage = () => {
     }
   };
 
+  const removeCodingLock = async (assignment) => {
+    setPendingCodingLockId(assignment.id);
+    try {
+      await api.post(config.api.endpoints.assessments.clearCheatingFlag(assignment.id));
+      setLockedAssignments((current) => current.filter((item) => item.id !== assignment.id));
+      addNotification('Coding lock removed and student warning count reset to zero.', 'success');
+    } catch (error) {
+      addNotification(error.response?.data?.error || 'Could not remove the coding lock.', 'error');
+    } finally {
+      setPendingCodingLockId(null);
+    }
+  };
+
   return (
     <div className="space-y-6 p-4 sm:p-6">
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
@@ -129,6 +156,52 @@ const StudentAccessPage = () => {
           </div>
         </Alert>
       )}
+
+      <Card className="space-y-4 border-rose-200 dark:border-rose-900/50">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <CardTitle>Locked session students</CardTitle>
+            <CardDescription>Students whose coding sessions are currently locked across assessments.</CardDescription>
+          </div>
+          <Badge variant={lockedAssignments.length ? 'danger' : 'neutral'}>{lockedAssignments.length} locked</Badge>
+        </div>
+        {loading ? (
+          <p className="py-4 text-center text-sm text-slate-500">Loading locked sessions…</p>
+        ) : lockedAssignments.length ? (
+          <div className="space-y-2">
+            {lockedAssignments.map((assignment) => (
+              <div key={assignment.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-rose-200 bg-rose-50 p-3 dark:border-rose-900/50 dark:bg-rose-950/20">
+                <div className="min-w-0 text-sm">
+                  <p className="font-semibold text-slate-900 dark:text-white">
+                    <ShieldAlert size={15} className="mr-1 inline text-rose-500" />
+                    {assignment.student_name || assignment.student_email || 'Student'}
+                  </p>
+                  <p className="truncate text-slate-600 dark:text-slate-300">{assignment.assessment_title || 'Assessment'}</p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    {assignment.cheating_flag_reason === 'high_code_writing_speed'
+                      ? `Code-writing speed: ${Math.round(assignment.cheating_flag_speed_wpm || 0)} WPM`
+                      : `Page-level event: ${String(assignment.cheating_flag_reason || 'integrity check').replaceAll('_', ' ')}`}
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  icon={UnlockKeyhole}
+                  loading={pendingCodingLockId === assignment.id}
+                  disabled={pendingCodingLockId !== null && pendingCodingLockId !== assignment.id}
+                  onClick={() => removeCodingLock(assignment)}
+                >
+                  Remove coding lock
+                </Button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="rounded-lg bg-slate-50 px-4 py-6 text-center text-sm text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+            No locked coding sessions.
+          </p>
+        )}
+      </Card>
 
       <div className="grid gap-3 sm:grid-cols-3">
         <Card className="flex items-center gap-3 p-4">
