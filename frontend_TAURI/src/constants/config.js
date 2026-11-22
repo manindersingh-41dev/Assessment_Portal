@@ -56,7 +56,7 @@ export const config = {
         myAssignments: '/assessments/assignments/',
         startAssignment: (id) => `/assessments/assignments/${id}/start/`,
         assignmentDetail: (id) => `/assessments/assignments/${id}/`,
-        flagCheating: (id) => `/assessments/assignments/${id}/flag-cheating/`,
+        recordIntegrityEvent: (id) => `/assessments/assignments/${id}/integrity-event/`,
         clearCheatingFlag: (id) => `/assessments/assignments/${id}/clear-cheating-flag/`,
         submitAssignment: (id) => `/assessments/assignments/${id}/submit/`,
         assignmentDrafts: (id) => `/assessments/assignments/${id}/drafts/`,

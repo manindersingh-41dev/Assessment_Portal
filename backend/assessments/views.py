@@ -30,7 +30,7 @@ from users.models import User
 
 from .models import (
     Assessment, AssessmentAnswerDraft, AssessmentNotification, AssessmentQuestion,
-    AssessmentAssignment, AssessmentSpeedBreachEvent,
+    AssessmentAssignment, AssessmentIntegrityEvent,
 )
 from submissions.models import CodeSubmission
 from submissions.services import SubmissionService
@@ -56,7 +56,7 @@ from .notifications import (
     queue_notification_group,
 )
 
-MAX_SPEED_WARNINGS = 3
+MAX_INTEGRITY_WARNINGS = 5
 
 
 class AssessmentPagination(PageNumberPagination):
@@ -561,53 +561,66 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
             'is_flagged_cheating': assignment.is_flagged_cheating,
             'cheating_flag_reason': assignment.cheating_flag_reason,
             'cheating_flag_cleared_at': assignment.cheating_flag_cleared_at,
-            'speed_warning_count': assignment.student.speed_warning_count,
+            'integrity_warning_count': assignment.student.integrity_warning_count,
         })
+
+    @action(detail=True, methods=['post'], url_path='integrity-event')
+    def integrity_event(self, request, pk=None):
+        """Record page-level or code-speed integrity events for a student."""
+        return self._record_integrity_event(request)
 
     @action(detail=True, methods=['post'], url_path='flag-cheating')
     def flag_cheating(self, request, pk=None):
-        """Give up to three persistent warnings before locking an attempt."""
+        """Compatibility route for older clients recording a speed breach."""
+        return self._record_integrity_event(request)
+
+    def _record_integrity_event(self, request):
         assignment = self.get_object()
         if request.user.role != 'student' or assignment.student_id != request.user.id:
             return Response(
-                {'error': 'Only the assigned student can flag this attempt.'},
+                {'error': 'Only the assigned student can report this integrity event.'},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        if request.data.get('reason') != 'high_code_writing_speed':
+        event_type = request.data.get('reason')
+        if event_type not in AssessmentIntegrityEvent.EventType.values:
             return Response(
                 {'error': 'Unsupported integrity flag reason.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        try:
-            speed_wpm = float(request.data.get('speed_wpm'))
-        except (TypeError, ValueError):
-            speed_wpm = float('nan')
-        try:
-            sustained_ms = int(request.data.get('sustained_ms'))
-        except (TypeError, ValueError):
-            sustained_ms = 0
+        speed_wpm = None
+        sustained_ms = None
+        if event_type == AssessmentIntegrityEvent.EventType.SPEED:
+            try:
+                speed_wpm = float(request.data.get('speed_wpm'))
+            except (TypeError, ValueError):
+                speed_wpm = float('nan')
+            try:
+                sustained_ms = int(request.data.get('sustained_ms'))
+            except (TypeError, ValueError):
+                sustained_ms = 0
         submitted_event_id = request.data.get('event_id')
         if submitted_event_id:
             try:
                 event_id = uuid.UUID(str(submitted_event_id))
             except (AttributeError, TypeError, ValueError):
                 return Response(
-                    {'error': 'A valid speed-breach event ID is required.'},
+                    {'error': 'A valid integrity-event ID is required.'},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
         else:
             event_id = uuid.uuid4()
-        if not math.isfinite(speed_wpm) or speed_wpm <= 85:
-            return Response(
-                {'error': 'A code-writing speed above 85 WPM is required.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        if sustained_ms < 3_000:
-            return Response(
-                {'error': 'The speed must remain above the limit for at least three seconds.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        if event_type == AssessmentIntegrityEvent.EventType.SPEED:
+            if not math.isfinite(speed_wpm) or speed_wpm <= 85:
+                return Response(
+                    {'error': 'A code-writing speed above 85 WPM is required.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if sustained_ms < 3_000:
+                return Response(
+                    {'error': 'The speed must remain above the limit for at least three seconds.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
         with transaction.atomic():
             student = User.objects.select_for_update().get(pk=assignment.student_id)
@@ -616,7 +629,7 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
                 .select_related('assessment')
                 .get(pk=assignment.pk)
             )
-            breach_event = AssessmentSpeedBreachEvent.objects.filter(
+            breach_event = AssessmentIntegrityEvent.objects.filter(
                 student=student,
                 event_id=event_id,
             ).first()
@@ -624,15 +637,15 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
             if breach_event is None:
                 if assignment.status != AssessmentAssignment.Status.STARTED:
                     return Response(
-                        {'error': 'Only an in-progress assessment can be flagged.'},
+                        {'error': 'Only an in-progress assessment can report an integrity event.'},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
 
-                if assignment.is_flagged_cheating or student.speed_warning_count >= MAX_SPEED_WARNINGS:
-                    outcome = AssessmentSpeedBreachEvent.Outcome.LOCKED
+                if assignment.is_flagged_cheating or student.integrity_warning_count >= MAX_INTEGRITY_WARNINGS:
+                    outcome = AssessmentIntegrityEvent.Outcome.LOCKED
                     if not assignment.is_flagged_cheating:
                         assignment.is_flagged_cheating = True
-                        assignment.cheating_flag_reason = 'high_code_writing_speed'
+                        assignment.cheating_flag_reason = event_type
                         assignment.cheating_flag_speed_wpm = speed_wpm
                         assignment.cheating_flag_sustained_ms = sustained_ms
                         assignment.cheating_flagged_at = timezone.now()
@@ -649,49 +662,61 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
                             'updated_at',
                         ])
                 else:
-                    student.speed_warning_count += 1
-                    student.save(update_fields=['speed_warning_count', 'updated_at'])
-                    outcome = AssessmentSpeedBreachEvent.Outcome.WARNING
+                    student.integrity_warning_count += 1
+                    student.save(update_fields=['integrity_warning_count', 'updated_at'])
+                    outcome = AssessmentIntegrityEvent.Outcome.WARNING
 
-                breach_event = AssessmentSpeedBreachEvent.objects.create(
+                breach_event = AssessmentIntegrityEvent.objects.create(
                     student=student,
                     assignment=assignment,
                     event_id=event_id,
+                    event_type=event_type,
                     speed_wpm=speed_wpm,
                     sustained_ms=sustained_ms,
                     outcome=outcome,
                 )
 
             assignment.student = student
-            warning_count = student.speed_warning_count
-            locked = breach_event.outcome == AssessmentSpeedBreachEvent.Outcome.LOCKED
+            warning_count = student.integrity_warning_count
+            event_type = breach_event.event_type
+            locked = breach_event.outcome == AssessmentIntegrityEvent.Outcome.LOCKED
 
         if locked:
             message = (
-                'This coding window is locked. The student had already received '
-                'three speed warnings and crossed the limit again.'
-            )
-        elif warning_count >= MAX_SPEED_WARNINGS:
-            message = (
-                f'Final warning ({warning_count} of {MAX_SPEED_WARNINGS}). '
-                'Do not use AI or scripts to write code. '
-                'Do not try to paste code using any alternative method. '
-                'Another sustained speed-limit breach will lock this coding window.'
+                f'This coding window is locked after {MAX_INTEGRITY_WARNINGS} persistent '
+                'integrity warnings and another policy event.'
             )
         else:
+            event_messages = {
+                AssessmentIntegrityEvent.EventType.SPEED:
+                    'Code-writing speed stayed above the 85 WPM limit for at least three seconds.',
+                AssessmentIntegrityEvent.EventType.TAB_HIDDEN:
+                    'The assessment tab became hidden or you switched away from it.',
+                AssessmentIntegrityEvent.EventType.WINDOW_BLUR:
+                    'The assessment window lost focus.',
+                AssessmentIntegrityEvent.EventType.FULLSCREEN_EXIT:
+                    'You exited the assessment fullscreen window.',
+            }
+            warning_kind = (
+                f'Final warning ({warning_count} of {MAX_INTEGRITY_WARNINGS}). '
+                'The next assessment-integrity event will lock this coding window.'
+                if warning_count >= MAX_INTEGRITY_WARNINGS
+                else f'Integrity warning ({warning_count} of {MAX_INTEGRITY_WARNINGS}). '
+                f'The next assessment-integrity event after warning {MAX_INTEGRITY_WARNINGS} '
+                'will lock this coding window.'
+            )
             message = (
-                f'Warning {warning_count} of {MAX_SPEED_WARNINGS}. '
+                f'{event_messages[event_type]} {warning_kind} '
                 'Do not use AI or scripts to write code. '
                 'Do not try to paste code using any alternative method. '
-                f'After {MAX_SPEED_WARNINGS} warnings, another sustained speed-limit breach will lock '
-                'this coding window.'
             )
 
         return Response({
             'event_id': str(event_id),
+            'event_type': event_type,
             'outcome': breach_event.outcome,
             'locked': locked,
-            'speed_warning_count': warning_count,
+            'integrity_warning_count': warning_count,
             'message': message,
             'assignment': AssessmentAssignmentSerializer(
                 assignment,

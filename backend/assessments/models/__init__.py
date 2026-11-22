@@ -7,7 +7,7 @@ from assessments.models.student_batch import StudentBatch  # noqa: F401
 from assessments.models.assessment_result import AssessmentResult  # noqa: F401
 from assessments.models.assessment_answer_draft import AssessmentAnswerDraft  # noqa: F401
 from assessments.models.assessment_notification import AssessmentNotification  # noqa: F401
-from assessments.models.speed_breach_event import AssessmentSpeedBreachEvent  # noqa: F401
+from assessments.models.speed_breach_event import AssessmentIntegrityEvent  # noqa: F401
 
 __all__ = [
     "Assessment",
@@ -17,5 +17,5 @@ __all__ = [
     "AssessmentResult",
     "AssessmentAnswerDraft",
     "AssessmentNotification",
-    "AssessmentSpeedBreachEvent",
+    "AssessmentIntegrityEvent",
 ]

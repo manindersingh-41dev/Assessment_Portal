@@ -32,7 +32,7 @@ const CODE_SPEED_LIMIT_WPM = 85;
 const CODE_SPEED_SUSTAIN_MS = 3_000;
 const CODE_SPEED_GAP_TOLERANCE_MS = 750;
 const CHARACTERS_PER_WORD = 5;
-const MAX_SPEED_WARNINGS = 3;
+const MAX_INTEGRITY_WARNINGS = 5;
 
 const createSpeedBreachEventId = () => {
   if (window.crypto?.randomUUID) return window.crypto.randomUUID();
@@ -234,10 +234,12 @@ const AssessmentAttemptPage = () => {
   const [submittingQuestionIds, setSubmittingQuestionIds] = useState(() => new Set());
   const [finalized, setFinalized] = useState(false);
   const [polling, setPolling] = useState(false);
-  const [integrityWarnings, setIntegrityWarnings] = useState(0);
-  const [speedWarningCount, setSpeedWarningCount] = useState(0);
-  const [speedWarningMessage, setSpeedWarningMessage] = useState('');
-  const [showSpeedWarning, setShowSpeedWarning] = useState(false);
+  const [integrityWarningCount, setIntegrityWarningCount] = useState(0);
+  const [integrityWarningMessage, setIntegrityWarningMessage] = useState('');
+  const [showIntegrityWarning, setShowIntegrityWarning] = useState(false);
+  const lastPageIntegrityWarningAtRef = useRef(0);
+  const lastObservedFullscreenRef = useRef(null);
+  const reportPageIntegrityEventRef = useRef(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isMobileKeyboardOpen, setIsMobileKeyboardOpen] = useState(false);
   const [visualViewportHeight, setVisualViewportHeight] = useState(0);
@@ -601,9 +603,11 @@ const AssessmentAttemptPage = () => {
       speedBreachInFlightRef.current = false;
       speedBreachEventIdRef.current = null;
       pendingSpeedBreachEventIdRef.current = null;
-      setSpeedWarningCount(0);
-      setSpeedWarningMessage('');
-      setShowSpeedWarning(false);
+      setIntegrityWarningCount(0);
+      setIntegrityWarningMessage('');
+      setShowIntegrityWarning(false);
+      lastPageIntegrityWarningAtRef.current = 0;
+      lastObservedFullscreenRef.current = null;
       highSpeedStartedAtRef.current = null;
       lastHighSpeedObservationAtRef.current = null;
       autoSubmitTriggeredRef.current = false;
@@ -656,7 +660,7 @@ const AssessmentAttemptPage = () => {
         }
         setAssessment(currentAssessment);
         setAssignment(activeAssignment);
-        setSpeedWarningCount(Number(activeAssignment.speed_warning_count) || 0);
+        setIntegrityWarningCount(Number(activeAssignment.integrity_warning_count) || 0);
         cheatingFlagRequestRef.current = Boolean(activeAssignment.is_flagged_cheating);
         if (activeAssignment.is_flagged_cheating) setCheatingFlagSyncStatus('saved');
         setQuestions(questionRows);
@@ -1016,24 +1020,34 @@ const AssessmentAttemptPage = () => {
   useEffect(() => {
     const syncFullscreen = async () => {
       const tauriWindow = getTauriWindow();
+      let fullscreen = false;
       if (tauriWindow) {
         try {
-          setIsFullscreen(await tauriWindow.isFullscreen());
+          fullscreen = await tauriWindow.isFullscreen();
         } catch {
-          setIsFullscreen(false);
+          fullscreen = false;
         }
-        return;
+      } else {
+        fullscreen = document.fullscreenElement === attemptRootRef.current;
       }
-      setIsFullscreen(document.fullscreenElement === attemptRootRef.current);
+      setIsFullscreen(fullscreen);
+      const previousFullscreen = lastObservedFullscreenRef.current;
+      lastObservedFullscreenRef.current = fullscreen;
+      if (previousFullscreen === true && !fullscreen) {
+        reportPageIntegrityEventRef.current?.('fullscreen_exit');
+      }
+      return fullscreen;
     };
     const onVisibilityChange = () => {
       if (document.visibilityState !== 'hidden' || finalized) return;
       Object.entries(codeRef.current).forEach(([questionId, sourceCode]) => {
         saveDraftNow(questionId, sourceCode);
       });
-      if (assessment?.is_timed === false) return;
-      setIntegrityWarnings((count) => count + 1);
-      addNotification('Leaving the assessment tab has been detected.', 'warning');
+      reportPageIntegrityEventRef.current?.('tab_hidden');
+    };
+    const onWindowBlur = () => {
+      if (document.visibilityState === 'hidden') return;
+      reportPageIntegrityEventRef.current?.('window_blur');
     };
     const onFullscreenChange = () => { void syncFullscreen(); };
     const onClipboard = (event) => {
@@ -1057,6 +1071,7 @@ const AssessmentAttemptPage = () => {
     };
 
     document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('blur', onWindowBlur);
     document.addEventListener('copy', onClipboard, true);
     document.addEventListener('cut', onClipboard, true);
     document.addEventListener('paste', onClipboard, true);
@@ -1070,6 +1085,7 @@ const AssessmentAttemptPage = () => {
       : null;
     return () => {
       document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('blur', onWindowBlur);
       document.removeEventListener('copy', onClipboard, true);
       document.removeEventListener('cut', onClipboard, true);
       document.removeEventListener('paste', onClipboard, true);
@@ -1079,7 +1095,7 @@ const AssessmentAttemptPage = () => {
       document.removeEventListener('fullscreenchange', onFullscreenChange);
       if (fullscreenPoll) window.clearInterval(fullscreenPoll);
     };
-  }, [addNotification, assessment?.is_timed, assignment?.status, finalized, saveDraftNow]);
+  }, [assignment?.status, finalized, saveDraftNow]);
 
   useEffect(() => {
     if (
@@ -1102,7 +1118,10 @@ const AssessmentAttemptPage = () => {
         if (controller.signal.aborted) return;
         const latestAssignment = { ...assignment, ...response.data };
         setAssignment(latestAssignment);
-        setSpeedWarningCount(Number(response.data.speed_warning_count) || 0);
+        setIntegrityWarningCount((count) => Math.max(
+          count,
+          Number(response.data.integrity_warning_count) || 0,
+        ));
         if (!latestAssignment.is_flagged_cheating) {
           cheatingFlagRequestRef.current = false;
           codeInsertionSamplesRef.current = [];
@@ -1127,6 +1146,60 @@ const AssessmentAttemptPage = () => {
     };
   }, [addNotification, assignment?.id, assignment?.is_flagged_cheating, cheatingFlagSyncStatus, finalized]);
 
+  const recordIntegrityEvent = (eventType, eventId, speedWpm = null, sustainedMs = null) => {
+    if (!assignment?.id || assignment.status !== 'started') return;
+    setCheatingFlagSyncStatus('saving');
+
+    api.post(endpoints.assessments.recordIntegrityEvent(assignment.id), {
+      reason: eventType,
+      speed_wpm: speedWpm,
+      sustained_ms: sustainedMs,
+      event_id: eventId,
+    }).then((response) => {
+      const result = response.data || {};
+      const savedAssignment = result.assignment;
+      if (
+        eventType === 'high_code_writing_speed'
+        && pendingSpeedBreachEventIdRef.current === eventId
+      ) {
+        pendingSpeedBreachEventIdRef.current = null;
+      }
+      if (savedAssignment) {
+        setAssignment((current) => {
+          if (current?.is_flagged_cheating && !savedAssignment.is_flagged_cheating) return current;
+          return { ...current, ...savedAssignment };
+        });
+      }
+      setIntegrityWarningCount((count) => Math.max(
+        count,
+        Number(result.integrity_warning_count) || 0,
+      ));
+      if (result.locked) {
+        cheatingFlagRequestRef.current = true;
+        setCheatingFlagSyncStatus('saved');
+      } else {
+        setCheatingFlagSyncStatus(cheatingFlagRequestRef.current ? 'saved' : '');
+        setIntegrityWarningMessage(result.message || 'An assessment integrity warning was recorded.');
+        setShowIntegrityWarning(true);
+      }
+    }).catch((eventError) => {
+      if (eventType === 'high_code_writing_speed') {
+        pendingSpeedBreachEventIdRef.current = eventId;
+        speedBreachActiveRef.current = false;
+        highSpeedStartedAtRef.current = null;
+        lastHighSpeedObservationAtRef.current = null;
+        codeInsertionSamplesRef.current = [];
+      }
+      setCheatingFlagSyncStatus('failed');
+      addNotification(
+        getErrorMessage(eventError, 'The integrity event could not be saved to the server.'),
+        'error',
+      );
+    }).finally(() => {
+      if (eventType === 'high_code_writing_speed') speedBreachInFlightRef.current = false;
+    });
+  };
+
   const recordHighCodeSpeed = (speedWpm, sustainedMs) => {
     if (
       !assignment?.id
@@ -1142,44 +1215,22 @@ const AssessmentAttemptPage = () => {
     speedBreachEventIdRef.current = eventId;
     pendingSpeedBreachEventIdRef.current = eventId;
     speedBreachInFlightRef.current = true;
-    setCheatingFlagSyncStatus('saving');
-
-    api.post(endpoints.assessments.flagCheating(assignment.id), {
-      reason: 'high_code_writing_speed',
-      speed_wpm: speedWpm,
-      sustained_ms: sustainedMs,
-      event_id: eventId,
-    }).then((response) => {
-      const result = response.data || {};
-      const savedAssignment = result.assignment;
-      if (savedAssignment) setAssignment((current) => ({ ...current, ...savedAssignment }));
-      if (pendingSpeedBreachEventIdRef.current === eventId) {
-        pendingSpeedBreachEventIdRef.current = null;
-      }
-      setSpeedWarningCount(Number(result.speed_warning_count) || 0);
-      if (result.locked) {
-        cheatingFlagRequestRef.current = true;
-        setCheatingFlagSyncStatus('saved');
-      } else {
-        setCheatingFlagSyncStatus('');
-        setSpeedWarningMessage(result.message || 'A sustained code-writing speed warning was recorded.');
-        setShowSpeedWarning(true);
-      }
-    }).catch((flagError) => {
-      setCheatingFlagSyncStatus('failed');
-      pendingSpeedBreachEventIdRef.current = eventId;
-      speedBreachActiveRef.current = false;
-      highSpeedStartedAtRef.current = null;
-      lastHighSpeedObservationAtRef.current = null;
-      codeInsertionSamplesRef.current = [];
-      addNotification(
-        getErrorMessage(flagError, 'The speed warning could not be saved to the server.'),
-        'error',
-      );
-    }).finally(() => {
-      speedBreachInFlightRef.current = false;
-    });
+    recordIntegrityEvent('high_code_writing_speed', eventId, speedWpm, sustainedMs);
   };
+
+  const recordPageIntegrityEvent = (eventType) => {
+    if (
+      !assignment?.id
+      || assignment.status !== 'started'
+      || finalized
+      || cheatingFlagRequestRef.current
+    ) return;
+    const now = Date.now();
+    if (now - lastPageIntegrityWarningAtRef.current < 3_000) return;
+    lastPageIntegrityWarningAtRef.current = now;
+    recordIntegrityEvent(eventType, createSpeedBreachEventId());
+  };
+  reportPageIntegrityEventRef.current = recordPageIntegrityEvent;
 
   const updateCode = (questionId, nextCode, measureSpeed = true, inputMetadata = null) => {
     const previousCode = codeRef.current[questionId] ?? '';
@@ -1414,7 +1465,7 @@ const AssessmentAttemptPage = () => {
       );
       const startedAssignment = response.data?.assignment || response.data;
       setAssignment(startedAssignment);
-      setSpeedWarningCount(Number(startedAssignment.speed_warning_count) || 0);
+      setIntegrityWarningCount(Number(startedAssignment.integrity_warning_count) || 0);
       const deadline = effectiveDeadline(assessment, startedAssignment);
       if (Number.isFinite(deadline)) {
         setDeadlineAt(deadline);
@@ -1493,13 +1544,13 @@ const AssessmentAttemptPage = () => {
                 {assessment.instructions}
               </div>
             )}
-            {speedWarningCount > 0 && (
+            {integrityWarningCount > 0 && (
               <div className="rounded-xl border border-amber-700 bg-amber-950/60 p-4 text-sm leading-6 text-amber-100" role="alert">
-                <strong>Persistent speed warnings: {speedWarningCount} of {MAX_SPEED_WARNINGS}.</strong>{' '}
+                <strong>Persistent integrity warnings: {integrityWarningCount} of {MAX_INTEGRITY_WARNINGS}.</strong>{' '}
                 Do not use AI or scripts to write code. Do not try to paste code using any alternative method.{' '}
-                {speedWarningCount >= MAX_SPEED_WARNINGS
-                  ? 'This is your final warning. Another sustained speed-limit breach will lock the coding window.'
-                  : 'After three warnings, another sustained speed-limit breach will lock the coding window.'}
+                {integrityWarningCount >= MAX_INTEGRITY_WARNINGS
+                  ? 'This is your final warning. Another speed or page-integrity event will lock the coding window.'
+                  : `After ${MAX_INTEGRITY_WARNINGS} warnings, another speed or page-integrity event will lock the coding window.`}
               </div>
             )}
           </div>
@@ -1524,11 +1575,6 @@ const AssessmentAttemptPage = () => {
           </div>
         </div>
         <div className="flex items-center gap-2 sm:gap-4">
-          {integrityWarnings > 0 && (
-            <span className="hidden items-center gap-1 text-xs text-amber-300 sm:inline-flex" title="Tab changes detected">
-              <ShieldAlert size={15} />{integrityWarnings} focus change{integrityWarnings === 1 ? '' : 's'}
-            </span>
-          )}
           <div className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 font-mono text-sm font-bold tabular-nums ${timerUrgent ? 'border-rose-500/50 bg-rose-950/60 text-rose-200' : 'border-slate-700 bg-slate-800 text-slate-100'}`} aria-live="polite" aria-label={deadlineAt ? `Time remaining ${remainingLabel}` : 'No time limit'}>
             <Clock3 size={16} />{deadlineAt ? remainingLabel : 'No time limit'}
           </div>
@@ -1541,25 +1587,25 @@ const AssessmentAttemptPage = () => {
         </div>
       </header>
 
-      {speedWarningCount > 0 && !assignment.is_flagged_cheating && (
+      {integrityWarningCount > 0 && !assignment.is_flagged_cheating && (
         <div className="shrink-0 border-b border-amber-700 bg-amber-950/70 px-4 py-3 text-sm leading-6 text-amber-100" role="alert">
-          <strong>Persistent speed warnings: {speedWarningCount} of {MAX_SPEED_WARNINGS}.</strong>{' '}
+          <strong>Persistent integrity warnings: {integrityWarningCount} of {MAX_INTEGRITY_WARNINGS}.</strong>{' '}
           Do not use AI or scripts to write code. Do not try to paste code using any alternative method.{' '}
-          {speedWarningCount >= MAX_SPEED_WARNINGS
-            ? 'This is your final warning. Another sustained speed-limit breach will lock the coding window.'
-            : 'After three warnings, another sustained speed-limit breach will lock the coding window.'}
+          {integrityWarningCount >= MAX_INTEGRITY_WARNINGS
+            ? 'This is your final warning. Another speed or page-integrity event will lock the coding window.'
+            : `After ${MAX_INTEGRITY_WARNINGS} warnings, another speed or page-integrity event will lock the coding window.`}
         </div>
       )}
 
       <Modal
-        isOpen={showSpeedWarning}
-        onClose={() => setShowSpeedWarning(false)}
-        title={speedWarningCount >= MAX_SPEED_WARNINGS ? 'Final speed warning' : 'Speed warning'}
-        footer={<Button onClick={() => setShowSpeedWarning(false)}>I understand</Button>}
+        isOpen={showIntegrityWarning}
+        onClose={() => setShowIntegrityWarning(false)}
+        title={integrityWarningCount >= MAX_INTEGRITY_WARNINGS ? 'Final integrity warning' : 'Integrity warning'}
+        footer={<Button onClick={() => setShowIntegrityWarning(false)}>I understand</Button>}
       >
-        <p className="text-sm leading-6 text-slate-600 dark:text-slate-300">{speedWarningMessage}</p>
+        <p className="text-sm leading-6 text-slate-600 dark:text-slate-300">{integrityWarningMessage}</p>
         <p className="mt-3 text-sm font-semibold text-amber-700 dark:text-amber-300">
-          Warnings given: {speedWarningCount} of {MAX_SPEED_WARNINGS}.
+          Warnings given: {integrityWarningCount} of {MAX_INTEGRITY_WARNINGS}.
         </p>
       </Modal>
 
@@ -1579,11 +1625,16 @@ const AssessmentAttemptPage = () => {
             <ShieldAlert size={32} className="mx-auto text-rose-400" />
             <h2 id="cheating-flag-title" className="text-xl font-bold text-white">Coding screen locked</h2>
             <p className="text-sm leading-6 text-slate-300">
-              Code-writing speed stayed above 85 WPM for at least three seconds after three persistent warnings. This coding window is locked for faculty review.
+              {assignment.cheating_flag_reason === 'high_code_writing_speed'
+                ? 'Code-writing speed stayed above 85 WPM for at least three seconds after persistent integrity warnings.'
+                : 'A page-level integrity event occurred after persistent integrity warnings.'}{' '}
+              This coding window is locked for faculty review.
             </p>
-            <p className="text-sm font-semibold text-rose-200">
+            {assignment.cheating_flag_reason === 'high_code_writing_speed' && (
+              <p className="text-sm font-semibold text-rose-200">
               Recorded speed: {Math.round(assignment.cheating_flag_speed_wpm || 0)} WPM
-            </p>
+              </p>
+            )}
             {cheatingFlagSyncStatus === 'failed' && (
               <p className="text-xs text-amber-200">The flag could not be saved to the server. Contact faculty before leaving this screen.</p>
             )}
@@ -1608,12 +1659,6 @@ const AssessmentAttemptPage = () => {
         <span className="ml-auto hidden shrink-0 text-xs text-slate-500 sm:block">{currentQuestion.marks} marks</span>
       </nav>
 
-      {integrityWarnings > 0 && (
-        <div className="shrink-0 border-b border-amber-900/70 bg-amber-950/60 px-4 py-2 text-xs text-amber-100 sm:hidden">
-          <AlertTriangle size={14} className="mr-1 inline" />{integrityWarnings} focus change{integrityWarnings === 1 ? '' : 's'} detected.
-        </div>
-      )}
-
       <div className={`shrink-0 border-b border-sky-900/60 bg-sky-950/30 px-4 py-2 text-xs text-sky-100 ${isMobileKeyboardOpen ? 'hidden' : ''}`} role="note">
         C code runs in your browser. The server decides your final score, and results can rarely differ from local GCC.
       </div>
@@ -1622,7 +1667,9 @@ const AssessmentAttemptPage = () => {
         <div className="flex shrink-0 items-center gap-2 border-b border-rose-900/70 bg-rose-950/70 px-4 py-3 text-sm text-rose-100" role="alert">
           <ShieldAlert size={17} />
           <span>
-            Cheating review flag: code-writing speed reached {Math.round(assignment.cheating_flag_speed_wpm || 0)} WPM (limit: 85 WPM).
+            Integrity lock: {assignment.cheating_flag_reason === 'high_code_writing_speed'
+              ? `code-writing speed reached ${Math.round(assignment.cheating_flag_speed_wpm || 0)} WPM (limit: 85 WPM).`
+              : `page-level event: ${String(assignment.cheating_flag_reason || 'integrity check').replaceAll('_', ' ')}.`}
             {' '}{cheatingFlagSyncStatus === 'failed' ? 'The flag could not be saved to the server.' : cheatingFlagSyncStatus === 'saving' ? 'Saving the flag…' : 'This attempt is flagged for faculty review.'}
           </span>
         </div>
