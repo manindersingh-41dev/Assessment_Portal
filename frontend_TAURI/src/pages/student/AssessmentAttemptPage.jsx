@@ -234,11 +234,11 @@ const AssessmentAttemptPage = () => {
   const [integrityWarningCount, setIntegrityWarningCount] = useState(0);
   const [integrityWarningMessage, setIntegrityWarningMessage] = useState('');
   const [showIntegrityWarning, setShowIntegrityWarning] = useState(false);
-  const lastPageIntegrityWarningAtRef = useRef(0);
   const lastObservedFullscreenRef = useRef(null);
   const reportPageIntegrityEventRef = useRef(null);
   const intentionalExitRef = useRef(false);
   const exitEventSuppressedAtRef = useRef(0);
+  const pendingWindowBlurTimerRef = useRef(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isMobileKeyboardOpen, setIsMobileKeyboardOpen] = useState(false);
   const [visualViewportHeight, setVisualViewportHeight] = useState(0);
@@ -606,7 +606,6 @@ const AssessmentAttemptPage = () => {
       setIntegrityWarningCount(0);
       setIntegrityWarningMessage('');
       setShowIntegrityWarning(false);
-      lastPageIntegrityWarningAtRef.current = 0;
       lastObservedFullscreenRef.current = null;
       intentionalExitRef.current = false;
       exitEventSuppressedAtRef.current = 0;
@@ -1021,6 +1020,10 @@ const AssessmentAttemptPage = () => {
     };
     const onVisibilityChange = () => {
       if (document.visibilityState !== 'hidden' || finalized) return;
+      if (pendingWindowBlurTimerRef.current !== null) {
+        window.clearTimeout(pendingWindowBlurTimerRef.current);
+        pendingWindowBlurTimerRef.current = null;
+      }
       Object.entries(codeRef.current).forEach(([questionId, sourceCode]) => {
         saveDraftNow(questionId, sourceCode);
       });
@@ -1028,15 +1031,15 @@ const AssessmentAttemptPage = () => {
     };
     const onWindowBlur = () => {
       if (document.visibilityState === 'hidden') return;
-      if (
-        lastObservedFullscreenRef.current === true
-        && !getTauriWindow()
-        && document.fullscreenElement !== attemptRootRef.current
-      ) {
-        exitEventSuppressedAtRef.current = Date.now();
-        return;
+      if (pendingWindowBlurTimerRef.current !== null) {
+        window.clearTimeout(pendingWindowBlurTimerRef.current);
       }
-      reportPageIntegrityEventRef.current?.('window_blur');
+      pendingWindowBlurTimerRef.current = window.setTimeout(() => {
+        pendingWindowBlurTimerRef.current = null;
+        if (document.visibilityState !== 'hidden') {
+          reportPageIntegrityEventRef.current?.('window_blur');
+        }
+      }, 250);
     };
     const onFullscreenChange = () => { void syncFullscreen(); };
     const onClipboard = (event) => {
@@ -1085,6 +1088,10 @@ const AssessmentAttemptPage = () => {
       document.removeEventListener('drop', onClipboard, true);
       document.removeEventListener('keydown', onKeyDown, true);
       document.removeEventListener('fullscreenchange', onFullscreenChange);
+      if (pendingWindowBlurTimerRef.current !== null) {
+        window.clearTimeout(pendingWindowBlurTimerRef.current);
+        pendingWindowBlurTimerRef.current = null;
+      }
       if (fullscreenPoll) window.clearInterval(fullscreenPoll);
     };
   }, [assignment?.status, finalized, saveDraftNow]);
@@ -1222,11 +1229,11 @@ const AssessmentAttemptPage = () => {
       || finalized
       || cheatingFlagRequestRef.current
       || intentionalExitRef.current
-      || Date.now() - exitEventSuppressedAtRef.current < EXIT_EVENT_SUPPRESSION_MS
+      || (
+        eventType === 'window_blur'
+        && Date.now() - exitEventSuppressedAtRef.current < EXIT_EVENT_SUPPRESSION_MS
+      )
     ) return;
-    const now = Date.now();
-    if (now - lastPageIntegrityWarningAtRef.current < 3_000) return;
-    lastPageIntegrityWarningAtRef.current = now;
     recordIntegrityEvent(eventType, createSpeedBreachEventId());
   };
   reportPageIntegrityEventRef.current = recordPageIntegrityEvent;
