@@ -251,7 +251,11 @@ const AssessmentDetailsPage = () => {
                   {assignment.is_flagged_cheating && (
                     <div className="mt-2 rounded-lg border border-rose-900/40 bg-rose-50 p-2 text-xs text-rose-800 dark:bg-rose-950/30 dark:text-rose-200">
                       <p className="font-semibold"><ShieldAlert size={14} className="mr-1 inline" />Cheating review flag</p>
-                      <p className="mt-1">Code-writing speed: {Math.round(assignment.cheating_flag_speed_wpm || 0)} WPM</p>
+                      <p className="mt-1">
+                        {assignment.cheating_flag_reason === 'high_code_writing_speed'
+                          ? `Code-writing speed: ${Math.round(assignment.cheating_flag_speed_wpm || 0)} WPM`
+                          : `Page-level event: ${String(assignment.cheating_flag_reason || 'integrity check').replaceAll('_', ' ')}`}
+                      </p>
                       {assignment.cheating_flag_sustained_ms > 0 && (
                         <p className="mt-1">Above limit for: {(assignment.cheating_flag_sustained_ms / 1000).toFixed(1)} seconds</p>
                       )}

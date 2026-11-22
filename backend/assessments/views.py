@@ -523,6 +523,10 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
         user = self.request.user
 
         if user.role == 'faculty' and user.is_faculty_approved:
+            if self.action == 'clear_cheating_flag':
+                return AssessmentAssignment.objects.select_related(
+                    'assessment', 'student', 'cheating_flag_cleared_by'
+                )
             # Faculty sees assignments for their assessments
             return AssessmentAssignment.objects.filter(
                 assessment__created_by=user
@@ -547,6 +551,37 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
             ).select_related('assessment').order_by('-created_at')
 
         return AssessmentAssignment.objects.none()
+
+    @action(detail=False, methods=['get'], url_path='locked')
+    def locked_assignments(self, request):
+        """List active coding locks for approved faculty review."""
+        if request.user.role != 'faculty' or not request.user.is_faculty_approved:
+            return Response(
+                {'error': 'Only approved faculty can view coding locks.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        assignments = AssessmentAssignment.objects.filter(
+            is_flagged_cheating=True,
+        ).select_related(
+            'assessment', 'student', 'cheating_flag_cleared_by'
+        ).prefetch_related(
+            Prefetch(
+                'notifications',
+                queryset=AssessmentNotification.objects.filter(
+                    kind=AssessmentNotification.Kind.ASSIGNED
+                ),
+            )
+        ).order_by('-cheating_flagged_at', '-created_at')
+        page = self.paginate_queryset(assignments)
+        serializer = self.get_serializer(
+            page if page is not None else assignments,
+            many=True,
+            context={'request': request},
+        )
+        if page is not None:
+            return self.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
     @action(detail=True, methods=['get'], url_path='flag-status')
     def flag_status(self, request, pk=None):
@@ -726,7 +761,7 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='clear-cheating-flag')
     def clear_cheating_flag(self, request, pk=None):
-        """Let the owning faculty member remove an accidental coding lock."""
+        """Let any approved faculty member remove a coding lock."""
         if request.user.role != 'faculty' or not request.user.is_faculty_approved:
             return Response(
                 {'error': 'Only approved faculty can remove a cheating lock.'},
@@ -734,11 +769,6 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
             )
 
         assignment = self.get_object()
-        if assignment.assessment.created_by_id != request.user.id:
-            return Response(
-                {'error': 'You can only remove locks on your assessments.'},
-                status=status.HTTP_403_FORBIDDEN,
-            )
 
         if assignment.is_flagged_cheating:
             assignment.is_flagged_cheating = False

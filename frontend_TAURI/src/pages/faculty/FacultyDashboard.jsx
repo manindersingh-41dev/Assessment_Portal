@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Activity, ArrowRight, BookOpen, CheckCircle2, Clock3, RefreshCw, Users } from 'lucide-react';
+import { Activity, ArrowRight, BookOpen, CheckCircle2, Clock3, RefreshCw, ShieldAlert, Users } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '../../components/Button';
 import { Alert, Badge, Card } from '../../components/Common';
@@ -31,6 +31,8 @@ const statusStyles = {
 const FacultyDashboard = () => {
   const [stats, setStats] = useState(null);
   const [recentSubmissions, setRecentSubmissions] = useState([]);
+  const [lockedAssignments, setLockedAssignments] = useState([]);
+  const [unlockingAssignmentId, setUnlockingAssignmentId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [reloadKey, setReloadKey] = useState(0);
@@ -43,10 +45,14 @@ const FacultyDashboard = () => {
     const loadDashboard = async () => {
       setLoading(true);
       setError('');
-      const [statsResult, submissionsResult] = await Promise.allSettled([
+      const [statsResult, submissionsResult, lockedAssignmentsResult] = await Promise.allSettled([
         api.get(config.api.endpoints.assessments.statistics, { signal: controller.signal }),
         api.get(config.api.endpoints.results.facultyOverview, {
           params: { page_size: 5 },
+          signal: controller.signal,
+        }),
+        api.get(config.api.endpoints.assessments.lockedAssignments, {
+          params: { page_size: 100 },
           signal: controller.signal,
         }),
       ]);
@@ -64,11 +70,29 @@ const FacultyDashboard = () => {
       } else {
         addNotification('Recent submissions could not be loaded.', 'warning');
       }
+      if (lockedAssignmentsResult.status === 'fulfilled') {
+        setLockedAssignments(asList(lockedAssignmentsResult.value.data));
+      } else {
+        addNotification('Coding locks could not be loaded.', 'warning');
+      }
       setLoading(false);
     };
     loadDashboard();
     return () => controller.abort();
   }, [addNotification, reloadKey]);
+
+  const removeCodingLock = async (assignmentId) => {
+    setUnlockingAssignmentId(assignmentId);
+    try {
+      await api.post(config.api.endpoints.assessments.clearCheatingFlag(assignmentId));
+      setLockedAssignments((current) => current.filter((assignment) => assignment.id !== assignmentId));
+      addNotification('Student coding lock removed.', 'success');
+    } catch (errorDetails) {
+      addNotification(errorDetails.response?.data?.error || 'Could not remove the coding lock.', 'error');
+    } finally {
+      setUnlockingAssignmentId(null);
+    }
+  };
 
   const metrics = [
     { label: 'Assessments', value: stats?.total_assessments ?? 0, icon: BookOpen },
@@ -111,6 +135,45 @@ const FacultyDashboard = () => {
           );
         })}
       </section>
+
+      <Card className="space-y-4">
+        <div>
+          <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Coding locks</h2>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Review and remove coding locks across all assessments.</p>
+        </div>
+        {lockedAssignments.length ? (
+          <div className="space-y-2">
+            {lockedAssignments.map((assignment) => (
+              <div key={assignment.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-rose-200 bg-rose-50 p-3 dark:border-rose-900/50 dark:bg-rose-950/20">
+                <div className="min-w-0 text-sm">
+                  <p className="font-semibold text-slate-900 dark:text-white">
+                    <ShieldAlert size={15} className="mr-1 inline text-rose-500" />
+                    {assignment.student_name || assignment.student_email || 'Student'}
+                  </p>
+                  <p className="truncate text-slate-600 dark:text-slate-300">{assignment.assessment_title || 'Assessment'}</p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    {assignment.cheating_flag_reason === 'high_code_writing_speed'
+                      ? `Code-writing speed: ${Math.round(assignment.cheating_flag_speed_wpm || 0)} WPM`
+                      : `Page-level event: ${String(assignment.cheating_flag_reason || 'integrity check').replaceAll('_', ' ')}`}
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  loading={unlockingAssignmentId === assignment.id}
+                  onClick={() => removeCodingLock(assignment.id)}
+                >
+                  Remove coding lock
+                </Button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="rounded-lg bg-slate-50 px-4 py-6 text-center text-sm text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+            No active coding locks.
+          </p>
+        )}
+      </Card>
 
       <Card className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">

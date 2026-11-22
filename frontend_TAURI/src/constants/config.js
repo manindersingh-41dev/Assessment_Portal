@@ -54,6 +54,7 @@ export const config = {
         assign: (id) => `/assessments/assessments/${id}/assign/`,
         assignments: (id) => `/assessments/assessments/${id}/assignments/`,
         myAssignments: '/assessments/assignments/',
+        lockedAssignments: '/assessments/assignments/locked/',
         startAssignment: (id) => `/assessments/assignments/${id}/start/`,
         assignmentDetail: (id) => `/assessments/assignments/${id}/`,
         recordIntegrityEvent: (id) => `/assessments/assignments/${id}/integrity-event/`,
