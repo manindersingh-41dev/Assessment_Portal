@@ -1616,6 +1616,19 @@ const AssessmentAttemptPage = () => {
         </p>
       </Modal>
 
+      {assignment.status === 'started' && !isFullscreen && !finalized && (
+        <div className="fixed inset-0 z-[40] flex items-center justify-center bg-slate-950/95 p-6" role="dialog" aria-modal="true" aria-labelledby="fullscreen-required-title">
+          <div className="max-w-md space-y-4 rounded-2xl border border-slate-700 bg-slate-900 p-6 text-center shadow-2xl">
+            <h2 id="fullscreen-required-title" className="text-xl font-bold text-white">Fullscreen required</h2>
+            <p className="text-sm leading-6 text-slate-300">Return to fullscreen to continue coding, or leave the attempt.</p>
+            <div className="flex flex-wrap justify-center gap-3">
+              <Button variant="secondary" onClick={exitAttempt}>Leave attempt</Button>
+              <Button onClick={enterFullscreen}>Return to fullscreen</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {assignment.is_flagged_cheating && !finalized && (
         <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/95 p-6" role="alertdialog" aria-modal="true" aria-labelledby="cheating-flag-title">
           <div className="max-w-lg space-y-4 rounded-2xl border border-rose-800 bg-slate-900 p-6 text-center shadow-2xl">
