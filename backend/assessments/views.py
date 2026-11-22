@@ -5,6 +5,7 @@ Handles all assessment-related endpoints including creation, assignment, and stu
 """
 
 import math
+import uuid
 from datetime import timedelta
 
 from rest_framework import viewsets, status, permissions
@@ -25,10 +26,11 @@ from django.db.models import (
 from django.db import transaction
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
+from users.models import User
 
 from .models import (
     Assessment, AssessmentAnswerDraft, AssessmentNotification, AssessmentQuestion,
-    AssessmentAssignment
+    AssessmentAssignment, AssessmentSpeedBreachEvent,
 )
 from submissions.models import CodeSubmission
 from submissions.services import SubmissionService
@@ -53,6 +55,8 @@ from .notifications import (
     queue_assessment_publication_notifications,
     queue_notification_group,
 )
+
+MAX_SPEED_WARNINGS = 3
 
 
 class AssessmentPagination(PageNumberPagination):
@@ -557,21 +561,17 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
             'is_flagged_cheating': assignment.is_flagged_cheating,
             'cheating_flag_reason': assignment.cheating_flag_reason,
             'cheating_flag_cleared_at': assignment.cheating_flag_cleared_at,
+            'speed_warning_count': assignment.student.speed_warning_count,
         })
 
     @action(detail=True, methods=['post'], url_path='flag-cheating')
     def flag_cheating(self, request, pk=None):
-        """Persist a high code-writing-speed integrity flag for the student."""
+        """Give up to three persistent warnings before locking an attempt."""
         assignment = self.get_object()
         if request.user.role != 'student' or assignment.student_id != request.user.id:
             return Response(
                 {'error': 'Only the assigned student can flag this attempt.'},
                 status=status.HTTP_403_FORBIDDEN,
-            )
-        if assignment.status != AssessmentAssignment.Status.STARTED:
-            return Response(
-                {'error': 'Only an in-progress assessment can be flagged.'},
-                status=status.HTTP_400_BAD_REQUEST,
             )
         if request.data.get('reason') != 'high_code_writing_speed':
             return Response(
@@ -587,6 +587,17 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
             sustained_ms = int(request.data.get('sustained_ms'))
         except (TypeError, ValueError):
             sustained_ms = 0
+        submitted_event_id = request.data.get('event_id')
+        if submitted_event_id:
+            try:
+                event_id = uuid.UUID(str(submitted_event_id))
+            except (AttributeError, TypeError, ValueError):
+                return Response(
+                    {'error': 'A valid speed-breach event ID is required.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        else:
+            event_id = uuid.uuid4()
         if not math.isfinite(speed_wpm) or speed_wpm <= 85:
             return Response(
                 {'error': 'A code-writing speed above 85 WPM is required.'},
@@ -598,32 +609,90 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if (
-            not assignment.is_flagged_cheating
-            or speed_wpm > (assignment.cheating_flag_speed_wpm or 0)
-        ):
-            newly_flagged = not assignment.is_flagged_cheating
-            assignment.is_flagged_cheating = True
-            assignment.cheating_flag_reason = 'high_code_writing_speed'
-            assignment.cheating_flag_speed_wpm = speed_wpm
-            assignment.cheating_flag_sustained_ms = sustained_ms
-            if newly_flagged:
-                assignment.cheating_flagged_at = timezone.now()
-                assignment.cheating_flag_cleared_at = None
-                assignment.cheating_flag_cleared_by = None
-            assignment.save(update_fields=[
-                'is_flagged_cheating',
-                'cheating_flag_reason',
-                'cheating_flag_speed_wpm',
-                'cheating_flag_sustained_ms',
-                'cheating_flagged_at',
-                'cheating_flag_cleared_at',
-                'cheating_flag_cleared_by',
-                'updated_at',
-            ])
+        with transaction.atomic():
+            student = User.objects.select_for_update().get(pk=assignment.student_id)
+            assignment = (
+                AssessmentAssignment.objects.select_for_update()
+                .select_related('assessment')
+                .get(pk=assignment.pk)
+            )
+            breach_event = AssessmentSpeedBreachEvent.objects.filter(
+                student=student,
+                event_id=event_id,
+            ).first()
+
+            if breach_event is None:
+                if assignment.status != AssessmentAssignment.Status.STARTED:
+                    return Response(
+                        {'error': 'Only an in-progress assessment can be flagged.'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                if assignment.is_flagged_cheating or student.speed_warning_count >= MAX_SPEED_WARNINGS:
+                    outcome = AssessmentSpeedBreachEvent.Outcome.LOCKED
+                    if not assignment.is_flagged_cheating:
+                        assignment.is_flagged_cheating = True
+                        assignment.cheating_flag_reason = 'high_code_writing_speed'
+                        assignment.cheating_flag_speed_wpm = speed_wpm
+                        assignment.cheating_flag_sustained_ms = sustained_ms
+                        assignment.cheating_flagged_at = timezone.now()
+                        assignment.cheating_flag_cleared_at = None
+                        assignment.cheating_flag_cleared_by = None
+                        assignment.save(update_fields=[
+                            'is_flagged_cheating',
+                            'cheating_flag_reason',
+                            'cheating_flag_speed_wpm',
+                            'cheating_flag_sustained_ms',
+                            'cheating_flagged_at',
+                            'cheating_flag_cleared_at',
+                            'cheating_flag_cleared_by',
+                            'updated_at',
+                        ])
+                else:
+                    student.speed_warning_count += 1
+                    student.save(update_fields=['speed_warning_count', 'updated_at'])
+                    outcome = AssessmentSpeedBreachEvent.Outcome.WARNING
+
+                breach_event = AssessmentSpeedBreachEvent.objects.create(
+                    student=student,
+                    assignment=assignment,
+                    event_id=event_id,
+                    speed_wpm=speed_wpm,
+                    sustained_ms=sustained_ms,
+                    outcome=outcome,
+                )
+
+            assignment.student = student
+            warning_count = student.speed_warning_count
+            locked = breach_event.outcome == AssessmentSpeedBreachEvent.Outcome.LOCKED
+
+        if locked:
+            message = (
+                'This coding window is locked. The student had already received '
+                'three speed warnings and crossed the limit again.'
+            )
+        elif warning_count >= MAX_SPEED_WARNINGS:
+            message = (
+                f'Final warning ({warning_count} of {MAX_SPEED_WARNINGS}). '
+                'Do not use AI or scripts to write code. '
+                'Do not try to paste code using any alternative method. '
+                'Another sustained speed-limit breach will lock this coding window.'
+            )
+        else:
+            message = (
+                f'Warning {warning_count} of {MAX_SPEED_WARNINGS}. '
+                'Do not use AI or scripts to write code. '
+                'Do not try to paste code using any alternative method. '
+                f'After {MAX_SPEED_WARNINGS} warnings, another sustained speed-limit breach will lock '
+                'this coding window.'
+            )
 
         return Response({
-            'message': 'This attempt has been flagged for review.',
+            'event_id': str(event_id),
+            'outcome': breach_event.outcome,
+            'locked': locked,
+            'speed_warning_count': warning_count,
+            'message': message,
             'assignment': AssessmentAssignmentSerializer(
                 assignment,
                 context={'request': request},

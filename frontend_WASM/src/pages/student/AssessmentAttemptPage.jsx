@@ -32,6 +32,15 @@ const CODE_SPEED_LIMIT_WPM = 85;
 const CODE_SPEED_SUSTAIN_MS = 3_000;
 const CODE_SPEED_GAP_TOLERANCE_MS = 750;
 const CHARACTERS_PER_WORD = 5;
+const MAX_SPEED_WARNINGS = 3;
+
+const createSpeedBreachEventId = () => {
+  if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (character) => {
+    const random = Math.floor(Math.random() * 16);
+    return (character === 'x' ? random : ((random & 0x3) | 0x8)).toString(16);
+  });
+};
 
 const countInsertedCharacters = (previousCode, nextCode) => {
   let prefixLength = 0;
@@ -226,6 +235,9 @@ const AssessmentAttemptPage = () => {
   const [finalized, setFinalized] = useState(false);
   const [polling, setPolling] = useState(false);
   const [integrityWarnings, setIntegrityWarnings] = useState(0);
+  const [speedWarningCount, setSpeedWarningCount] = useState(0);
+  const [speedWarningMessage, setSpeedWarningMessage] = useState('');
+  const [showSpeedWarning, setShowSpeedWarning] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isMobileKeyboardOpen, setIsMobileKeyboardOpen] = useState(false);
   const [visualViewportHeight, setVisualViewportHeight] = useState(0);
@@ -261,6 +273,10 @@ const AssessmentAttemptPage = () => {
   const workspacePanelsRef = useRef(null);
   const codeInsertionSamplesRef = useRef([]);
   const cheatingFlagRequestRef = useRef(false);
+  const speedBreachActiveRef = useRef(false);
+  const speedBreachInFlightRef = useRef(false);
+  const speedBreachEventIdRef = useRef(null);
+  const pendingSpeedBreachEventIdRef = useRef(null);
   const highSpeedStartedAtRef = useRef(null);
   const lastHighSpeedObservationAtRef = useRef(null);
 
@@ -581,6 +597,13 @@ const AssessmentAttemptPage = () => {
       setCurrentQuestionIndex(0);
       codeInsertionSamplesRef.current = [];
       cheatingFlagRequestRef.current = false;
+      speedBreachActiveRef.current = false;
+      speedBreachInFlightRef.current = false;
+      speedBreachEventIdRef.current = null;
+      pendingSpeedBreachEventIdRef.current = null;
+      setSpeedWarningCount(0);
+      setSpeedWarningMessage('');
+      setShowSpeedWarning(false);
       highSpeedStartedAtRef.current = null;
       lastHighSpeedObservationAtRef.current = null;
       autoSubmitTriggeredRef.current = false;
@@ -633,6 +656,7 @@ const AssessmentAttemptPage = () => {
         }
         setAssessment(currentAssessment);
         setAssignment(activeAssignment);
+        setSpeedWarningCount(Number(activeAssignment.speed_warning_count) || 0);
         cheatingFlagRequestRef.current = Boolean(activeAssignment.is_flagged_cheating);
         if (activeAssignment.is_flagged_cheating) setCheatingFlagSyncStatus('saved');
         setQuestions(questionRows);
@@ -1078,11 +1102,14 @@ const AssessmentAttemptPage = () => {
         if (controller.signal.aborted) return;
         const latestAssignment = { ...assignment, ...response.data };
         setAssignment(latestAssignment);
+        setSpeedWarningCount(Number(response.data.speed_warning_count) || 0);
         if (!latestAssignment.is_flagged_cheating) {
           cheatingFlagRequestRef.current = false;
           codeInsertionSamplesRef.current = [];
           highSpeedStartedAtRef.current = null;
           lastHighSpeedObservationAtRef.current = null;
+          speedBreachActiveRef.current = false;
+          speedBreachEventIdRef.current = null;
           setCheatingFlagSyncStatus('');
           addNotification('Faculty removed the coding lock. You may continue.', 'success');
         }
@@ -1100,70 +1127,105 @@ const AssessmentAttemptPage = () => {
     };
   }, [addNotification, assignment?.id, assignment?.is_flagged_cheating, cheatingFlagSyncStatus, finalized]);
 
-  const flagHighCodeSpeed = (speedWpm, sustainedMs) => {
+  const recordHighCodeSpeed = (speedWpm, sustainedMs) => {
     if (
       !assignment?.id
       || assignment.status !== 'started'
       || cheatingFlagRequestRef.current
+      || speedBreachInFlightRef.current
     ) return;
 
-    cheatingFlagRequestRef.current = true;
+    speedBreachActiveRef.current = true;
+    const eventId = pendingSpeedBreachEventIdRef.current
+      || speedBreachEventIdRef.current
+      || createSpeedBreachEventId();
+    speedBreachEventIdRef.current = eventId;
+    pendingSpeedBreachEventIdRef.current = eventId;
+    speedBreachInFlightRef.current = true;
     setCheatingFlagSyncStatus('saving');
-    setAssignment((current) => ({
-      ...current,
-      is_flagged_cheating: true,
-      cheating_flag_reason: 'high_code_writing_speed',
-      cheating_flag_speed_wpm: speedWpm,
-      cheating_flag_sustained_ms: sustainedMs,
-      cheating_flagged_at: new Date().toISOString(),
-    }));
 
     api.post(endpoints.assessments.flagCheating(assignment.id), {
       reason: 'high_code_writing_speed',
       speed_wpm: speedWpm,
       sustained_ms: sustainedMs,
+      event_id: eventId,
     }).then((response) => {
-      const savedAssignment = response.data?.assignment;
+      const result = response.data || {};
+      const savedAssignment = result.assignment;
       if (savedAssignment) setAssignment((current) => ({ ...current, ...savedAssignment }));
-      setCheatingFlagSyncStatus('saved');
+      if (pendingSpeedBreachEventIdRef.current === eventId) {
+        pendingSpeedBreachEventIdRef.current = null;
+      }
+      setSpeedWarningCount(Number(result.speed_warning_count) || 0);
+      if (result.locked) {
+        cheatingFlagRequestRef.current = true;
+        setCheatingFlagSyncStatus('saved');
+      } else {
+        setCheatingFlagSyncStatus('');
+        setSpeedWarningMessage(result.message || 'A sustained code-writing speed warning was recorded.');
+        setShowSpeedWarning(true);
+      }
     }).catch((flagError) => {
       setCheatingFlagSyncStatus('failed');
+      pendingSpeedBreachEventIdRef.current = eventId;
+      speedBreachActiveRef.current = false;
+      highSpeedStartedAtRef.current = null;
+      lastHighSpeedObservationAtRef.current = null;
+      codeInsertionSamplesRef.current = [];
       addNotification(
-        getErrorMessage(flagError, 'The cheating flag could not be saved to the server.'),
+        getErrorMessage(flagError, 'The speed warning could not be saved to the server.'),
         'error',
       );
+    }).finally(() => {
+      speedBreachInFlightRef.current = false;
     });
   };
 
-  const updateCode = (questionId, nextCode, measureSpeed = true) => {
+  const updateCode = (questionId, nextCode, measureSpeed = true, inputMetadata = null) => {
     const previousCode = codeRef.current[questionId] ?? '';
     if (measureSpeed && assignment?.status === 'started') {
-      const insertedCharacters = countInsertedCharacters(previousCode, nextCode);
-      if (insertedCharacters > 0) {
-        const now = Date.now();
-        const samples = codeInsertionSamplesRef.current.filter(
-          (sample) => now - sample.at < CODE_SPEED_WINDOW_MS,
-        );
-        samples.push({ at: now, characters: insertedCharacters });
-        codeInsertionSamplesRef.current = samples;
-        const charactersInWindow = samples.reduce((total, sample) => total + sample.characters, 0);
-        const speedWpm = (charactersInWindow * 60_000)
-          / (CHARACTERS_PER_WORD * CODE_SPEED_WINDOW_MS);
-        if (speedWpm > CODE_SPEED_LIMIT_WPM) {
-          const lastObservation = lastHighSpeedObservationAtRef.current;
-          if (
-            highSpeedStartedAtRef.current === null
-            || (lastObservation !== null && now - lastObservation > CODE_SPEED_GAP_TOLERANCE_MS)
-          ) {
-            highSpeedStartedAtRef.current = now;
+      if (inputMetadata?.repeat) {
+        codeInsertionSamplesRef.current = [];
+        highSpeedStartedAtRef.current = null;
+        lastHighSpeedObservationAtRef.current = null;
+        speedBreachActiveRef.current = false;
+        speedBreachEventIdRef.current = null;
+      } else {
+        const insertedTextCharacters = countInsertedCharacters(previousCode, nextCode);
+        const insertedCharacters = inputMetadata?.isPrintable
+          ? Math.min(1, insertedTextCharacters)
+          : insertedTextCharacters;
+        if (insertedCharacters > 0) {
+          const now = Date.now();
+          const samples = codeInsertionSamplesRef.current.filter(
+            (sample) => now - sample.at < CODE_SPEED_WINDOW_MS,
+          );
+          samples.push({ at: now, characters: insertedCharacters });
+          codeInsertionSamplesRef.current = samples;
+          const charactersInWindow = samples.reduce((total, sample) => total + sample.characters, 0);
+          const speedWpm = (charactersInWindow * 60_000)
+            / (CHARACTERS_PER_WORD * CODE_SPEED_WINDOW_MS);
+
+          if (speedWpm > CODE_SPEED_LIMIT_WPM) {
+            if (!speedBreachActiveRef.current) {
+              const lastObservation = lastHighSpeedObservationAtRef.current;
+              if (
+                highSpeedStartedAtRef.current === null
+                || (lastObservation !== null && now - lastObservation > CODE_SPEED_GAP_TOLERANCE_MS)
+              ) {
+                highSpeedStartedAtRef.current = now;
+              }
+              lastHighSpeedObservationAtRef.current = now;
+              if (now - highSpeedStartedAtRef.current >= CODE_SPEED_SUSTAIN_MS) {
+                recordHighCodeSpeed(speedWpm, now - highSpeedStartedAtRef.current);
+              }
+            }
+          } else {
+            highSpeedStartedAtRef.current = null;
+            lastHighSpeedObservationAtRef.current = null;
+            speedBreachActiveRef.current = false;
+            speedBreachEventIdRef.current = null;
           }
-          lastHighSpeedObservationAtRef.current = now;
-          if (now - highSpeedStartedAtRef.current >= CODE_SPEED_SUSTAIN_MS) {
-            flagHighCodeSpeed(speedWpm, now - highSpeedStartedAtRef.current);
-          }
-        } else {
-          highSpeedStartedAtRef.current = null;
-          lastHighSpeedObservationAtRef.current = null;
         }
       }
     }
@@ -1352,6 +1414,7 @@ const AssessmentAttemptPage = () => {
       );
       const startedAssignment = response.data?.assignment || response.data;
       setAssignment(startedAssignment);
+      setSpeedWarningCount(Number(startedAssignment.speed_warning_count) || 0);
       const deadline = effectiveDeadline(assessment, startedAssignment);
       if (Number.isFinite(deadline)) {
         setDeadlineAt(deadline);
@@ -1430,6 +1493,15 @@ const AssessmentAttemptPage = () => {
                 {assessment.instructions}
               </div>
             )}
+            {speedWarningCount > 0 && (
+              <div className="rounded-xl border border-amber-700 bg-amber-950/60 p-4 text-sm leading-6 text-amber-100" role="alert">
+                <strong>Persistent speed warnings: {speedWarningCount} of {MAX_SPEED_WARNINGS}.</strong>{' '}
+                Do not use AI or scripts to write code. Do not try to paste code using any alternative method.{' '}
+                {speedWarningCount >= MAX_SPEED_WARNINGS
+                  ? 'This is your final warning. Another sustained speed-limit breach will lock the coding window.'
+                  : 'After three warnings, another sustained speed-limit breach will lock the coding window.'}
+              </div>
+            )}
           </div>
           {startError && <Alert type="error">{startError}</Alert>}
           <div className="flex flex-wrap gap-3">
@@ -1469,6 +1541,28 @@ const AssessmentAttemptPage = () => {
         </div>
       </header>
 
+      {speedWarningCount > 0 && !assignment.is_flagged_cheating && (
+        <div className="shrink-0 border-b border-amber-700 bg-amber-950/70 px-4 py-3 text-sm leading-6 text-amber-100" role="alert">
+          <strong>Persistent speed warnings: {speedWarningCount} of {MAX_SPEED_WARNINGS}.</strong>{' '}
+          Do not use AI or scripts to write code. Do not try to paste code using any alternative method.{' '}
+          {speedWarningCount >= MAX_SPEED_WARNINGS
+            ? 'This is your final warning. Another sustained speed-limit breach will lock the coding window.'
+            : 'After three warnings, another sustained speed-limit breach will lock the coding window.'}
+        </div>
+      )}
+
+      <Modal
+        isOpen={showSpeedWarning}
+        onClose={() => setShowSpeedWarning(false)}
+        title={speedWarningCount >= MAX_SPEED_WARNINGS ? 'Final speed warning' : 'Speed warning'}
+        footer={<Button onClick={() => setShowSpeedWarning(false)}>I understand</Button>}
+      >
+        <p className="text-sm leading-6 text-slate-600 dark:text-slate-300">{speedWarningMessage}</p>
+        <p className="mt-3 text-sm font-semibold text-amber-700 dark:text-amber-300">
+          Warnings given: {speedWarningCount} of {MAX_SPEED_WARNINGS}.
+        </p>
+      </Modal>
+
       {assignment.status === 'started' && !isFullscreen && !finalized && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/95 p-6" role="alertdialog" aria-modal="true" aria-labelledby="fullscreen-required-title">
           <div className="max-w-md space-y-4 rounded-2xl border border-slate-700 bg-slate-900 p-6 text-center shadow-2xl">
@@ -1485,7 +1579,7 @@ const AssessmentAttemptPage = () => {
             <ShieldAlert size={32} className="mx-auto text-rose-400" />
             <h2 id="cheating-flag-title" className="text-xl font-bold text-white">Coding screen locked</h2>
             <p className="text-sm leading-6 text-slate-300">
-              Code-writing speed stayed above 85 WPM for at least three seconds. This attempt has been flagged for suspected cheating and is locked for faculty review.
+              Code-writing speed stayed above 85 WPM for at least three seconds after three persistent warnings. This coding window is locked for faculty review.
             </p>
             <p className="text-sm font-semibold text-rose-200">
               Recorded speed: {Math.round(assignment.cheating_flag_speed_wpm || 0)} WPM
@@ -1588,7 +1682,7 @@ const AssessmentAttemptPage = () => {
               </span>
             </div>
             <div className={`min-h-48 min-w-0 flex-1 overflow-hidden rounded-xl border border-slate-800 lg:min-h-0 ${isMobileKeyboardOpen ? 'min-h-0' : ''}`}>
-              <CodeEditor code={currentCode} onChange={(value) => updateCode(currentQuestion.id, value)}
+              <CodeEditor code={currentCode} onChange={(value, inputMetadata) => updateCode(currentQuestion.id, value, true, inputMetadata)}
                 language="c" readOnly={!canEdit} fontSize={14} />
             </div>
           </div>

@@ -98,6 +98,11 @@ class User(AbstractUser):
         help_text="Faculty must be approved by administrator"
     )
 
+    speed_warning_count = models.PositiveSmallIntegerField(
+        default=0,
+        help_text="Lifetime count of sustained code-writing speed warnings given to this student.",
+    )
+
     # Account status
     is_active = models.BooleanField(
         default=True,

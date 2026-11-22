@@ -297,6 +297,10 @@ class AssessmentAssignmentSerializer(serializers.ModelSerializer):
         source="student.get_full_name", read_only=True
     )
     assessment_title = serializers.CharField(source="assessment.title", read_only=True)
+    speed_warning_count = serializers.IntegerField(
+        source="student.speed_warning_count",
+        read_only=True,
+    )
     email_notifications = serializers.SerializerMethodField()
 
     def get_email_notifications(self, assignment):
@@ -315,6 +319,7 @@ class AssessmentAssignmentSerializer(serializers.ModelSerializer):
             "student",
             "student_name",
             "student_email",
+            "speed_warning_count",
             "status",
             "started_at",
             "submitted_at",
