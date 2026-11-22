@@ -33,6 +33,7 @@ const CODE_SPEED_SUSTAIN_MS = 3_000;
 const CODE_SPEED_GAP_TOLERANCE_MS = 750;
 const CHARACTERS_PER_WORD = 5;
 const MAX_INTEGRITY_WARNINGS = 5;
+const INTENTIONAL_EXIT_EVENT_GRACE_MS = 3_000;
 
 const createSpeedBreachEventId = () => {
   if (window.crypto?.randomUUID) return window.crypto.randomUUID();
@@ -236,6 +237,8 @@ const AssessmentAttemptPage = () => {
   const lastPageIntegrityWarningAtRef = useRef(0);
   const lastObservedFullscreenRef = useRef(null);
   const reportPageIntegrityEventRef = useRef(null);
+  const intentionalExitRef = useRef(false);
+  const escapePressedAtRef = useRef(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isMobileKeyboardOpen, setIsMobileKeyboardOpen] = useState(false);
   const [visualViewportHeight, setVisualViewportHeight] = useState(0);
@@ -605,6 +608,8 @@ const AssessmentAttemptPage = () => {
       setShowIntegrityWarning(false);
       lastPageIntegrityWarningAtRef.current = 0;
       lastObservedFullscreenRef.current = null;
+      intentionalExitRef.current = false;
+      escapePressedAtRef.current = 0;
       highSpeedStartedAtRef.current = null;
       lastHighSpeedObservationAtRef.current = null;
       autoSubmitTriggeredRef.current = false;
@@ -1009,7 +1014,8 @@ const AssessmentAttemptPage = () => {
       setIsFullscreen(fullscreen);
       const previousFullscreen = lastObservedFullscreenRef.current;
       lastObservedFullscreenRef.current = fullscreen;
-      if (previousFullscreen === true && !fullscreen) {
+      const recentEscape = Date.now() - escapePressedAtRef.current < INTENTIONAL_EXIT_EVENT_GRACE_MS;
+      if (previousFullscreen === true && !fullscreen && !intentionalExitRef.current && !recentEscape) {
         reportPageIntegrityEventRef.current?.('fullscreen_exit');
       }
       return fullscreen;
@@ -1037,6 +1043,9 @@ const AssessmentAttemptPage = () => {
     };
     const onKeyDown = (event) => {
       const key = event.key.toLowerCase();
+      if (key === 'escape' && assignment?.status === 'started') {
+        escapePressedAtRef.current = Date.now();
+      }
       const clipboardShortcut = ((event.ctrlKey || event.metaKey) && ['c', 'v', 'x'].includes(key))
         || (event.ctrlKey && key === 'insert')
         || (event.shiftKey && ['insert', 'delete'].includes(key));
@@ -1200,6 +1209,8 @@ const AssessmentAttemptPage = () => {
       || assignment.status !== 'started'
       || finalized
       || cheatingFlagRequestRef.current
+      || intentionalExitRef.current
+      || Date.now() - escapePressedAtRef.current < INTENTIONAL_EXIT_EVENT_GRACE_MS
     ) return;
     const now = Date.now();
     if (now - lastPageIntegrityWarningAtRef.current < 3_000) return;
@@ -1455,6 +1466,7 @@ const AssessmentAttemptPage = () => {
   };
 
   const exitAttempt = async () => {
+    intentionalExitRef.current = true;
     setShowExitConfirm(false);
     await flushDrafts();
     try {
