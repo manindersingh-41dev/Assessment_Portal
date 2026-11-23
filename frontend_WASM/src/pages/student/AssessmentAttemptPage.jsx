@@ -1039,10 +1039,15 @@ const AssessmentAttemptPage = () => {
       lastObservedFullscreenRef.current = fullscreen;
       if (previousFullscreen === true && !fullscreen) {
         exitEventSuppressedAtRef.current = Date.now();
+        codeInsertionSamplesRef.current = [];
+        highSpeedStartedAtRef.current = null;
+        lastHighSpeedObservationAtRef.current = null;
+        speedBreachActiveRef.current = false;
+        speedBreachEventIdRef.current = null;
       }
       return fullscreen;
     };
-    const onVisibilityChange = () => {
+    const onVisibilityChange = async () => {
       if (document.visibilityState !== 'hidden' || finalized) return;
       if (pendingWindowBlurTimerRef.current !== null) {
         window.clearTimeout(pendingWindowBlurTimerRef.current);
@@ -1051,17 +1056,21 @@ const AssessmentAttemptPage = () => {
       Object.entries(codeRef.current).forEach(([questionId, sourceCode]) => {
         saveDraftNow(questionId, sourceCode);
       });
-      reportPageIntegrityEventRef.current?.('tab_hidden');
+      if (await syncFullscreen()) {
+        reportPageIntegrityEventRef.current?.('tab_hidden');
+      }
     };
     const onWindowBlur = () => {
       if (document.visibilityState === 'hidden') return;
       if (pendingWindowBlurTimerRef.current !== null) {
         window.clearTimeout(pendingWindowBlurTimerRef.current);
       }
-      pendingWindowBlurTimerRef.current = window.setTimeout(() => {
+      pendingWindowBlurTimerRef.current = window.setTimeout(async () => {
         pendingWindowBlurTimerRef.current = null;
         if (document.visibilityState !== 'hidden') {
-          reportPageIntegrityEventRef.current?.('window_blur');
+          if (await syncFullscreen()) {
+            reportPageIntegrityEventRef.current?.('window_blur');
+          }
         }
       }, 250);
     };
@@ -1170,8 +1179,25 @@ const AssessmentAttemptPage = () => {
     };
   }, [addNotification, assignment?.id, assignment?.is_flagged_cheating, cheatingFlagSyncStatus, finalized]);
 
+  const isFullscreenCodingWindowActive = () => {
+    if (getTauriWindow()) return lastObservedFullscreenRef.current === true;
+    return document.fullscreenElement === attemptRootRef.current;
+  };
+
   const recordIntegrityEvent = (eventType, eventId, speedWpm = null, sustainedMs = null) => {
-    if (!assignment?.id || assignment.status !== 'started') return;
+    if (
+      !assignment?.id
+      || assignment.status !== 'started'
+      || !isFullscreenCodingWindowActive()
+    ) {
+      if (eventType === 'high_code_writing_speed') {
+        speedBreachActiveRef.current = false;
+        speedBreachInFlightRef.current = false;
+        speedBreachEventIdRef.current = null;
+        pendingSpeedBreachEventIdRef.current = null;
+      }
+      return;
+    }
     setCheatingFlagSyncStatus('saving');
 
     api.post(endpoints.assessments.recordIntegrityEvent(assignment.id), {
@@ -1228,13 +1254,38 @@ const AssessmentAttemptPage = () => {
     });
   };
 
-  const recordHighCodeSpeed = (speedWpm, sustainedMs) => {
+  const recordHighCodeSpeed = async (speedWpm, sustainedMs) => {
     if (
       !assignment?.id
       || assignment.status !== 'started'
       || cheatingFlagRequestRef.current
       || speedBreachInFlightRef.current
     ) return;
+
+    speedBreachInFlightRef.current = true;
+    let fullscreen = false;
+    const tauriWindow = getTauriWindow();
+    if (tauriWindow) {
+      try {
+        fullscreen = await tauriWindow.isFullscreen();
+      } catch {
+        fullscreen = false;
+      }
+    } else {
+      fullscreen = document.fullscreenElement === attemptRootRef.current;
+    }
+    lastObservedFullscreenRef.current = fullscreen;
+    setIsFullscreen(fullscreen);
+    if (!fullscreen) {
+      codeInsertionSamplesRef.current = [];
+      highSpeedStartedAtRef.current = null;
+      lastHighSpeedObservationAtRef.current = null;
+      speedBreachActiveRef.current = false;
+      speedBreachEventIdRef.current = null;
+      pendingSpeedBreachEventIdRef.current = null;
+      speedBreachInFlightRef.current = false;
+      return;
+    }
 
     speedBreachActiveRef.current = true;
     const eventId = pendingSpeedBreachEventIdRef.current
@@ -1258,13 +1309,18 @@ const AssessmentAttemptPage = () => {
         && Date.now() - exitEventSuppressedAtRef.current < EXIT_EVENT_SUPPRESSION_MS
       )
     ) return;
+    if (!isFullscreenCodingWindowActive()) return;
     recordIntegrityEvent(eventType, createSpeedBreachEventId());
   };
   reportPageIntegrityEventRef.current = recordPageIntegrityEvent;
 
   const updateCode = (questionId, nextCode, measureSpeed = true, inputMetadata = null) => {
     const previousCode = codeRef.current[questionId] ?? '';
-    if (measureSpeed && assignment?.status === 'started') {
+    if (
+      measureSpeed
+      && assignment?.status === 'started'
+      && isFullscreenCodingWindowActive()
+    ) {
       if (inputMetadata?.repeat) {
         codeInsertionSamplesRef.current = [];
         highSpeedStartedAtRef.current = null;
@@ -1443,6 +1499,7 @@ const AssessmentAttemptPage = () => {
       if (!await tauriWindow.isFullscreen()) await tauriWindow.setFullscreen(true);
       const fullscreen = await tauriWindow.isFullscreen();
       setIsFullscreen(fullscreen);
+      lastObservedFullscreenRef.current = fullscreen;
       return fullscreen;
     }
 
@@ -1454,6 +1511,7 @@ const AssessmentAttemptPage = () => {
     }
     const fullscreen = document.fullscreenElement === attemptRootRef.current;
     setIsFullscreen(fullscreen);
+    lastObservedFullscreenRef.current = fullscreen;
     return fullscreen;
   }, []);
 
