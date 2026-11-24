@@ -9,6 +9,8 @@ from django.db import models
 class AssessmentIntegrityEvent(models.Model):
     class EventType(models.TextChoices):
         SPEED = "high_code_writing_speed", "High code-writing speed"
+        RAPID_CODE_INSERTION = "rapid_code_insertion", "Rapid code insertion"
+        BULK_CODE_INSERTION = "bulk_code_insertion", "Bulk code insertion"
         TAB_HIDDEN = "tab_hidden", "Assessment tab hidden"
         WINDOW_BLUR = "window_blur", "Assessment window lost focus"
         FULLSCREEN_EXIT = "fullscreen_exit", "Fullscreen exited"
@@ -31,6 +33,7 @@ class AssessmentIntegrityEvent(models.Model):
     event_id = models.UUIDField()
     event_type = models.CharField(max_length=32, choices=EventType.choices)
     speed_wpm = models.FloatField(null=True, blank=True)
+    words_per_second = models.FloatField(null=True, blank=True)
     sustained_ms = models.PositiveIntegerField(null=True, blank=True)
     outcome = models.CharField(
         max_length=12,

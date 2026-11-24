@@ -5,6 +5,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { useAuthStore } from './store/authStore.js';
 import { useThemeStore } from './store/themeStore.js';
 import ToastContainer from './components/Toast.jsx';
+import MobileOSBlocked, { isMobileOSBlocked } from './components/MobileOSBlocked.jsx';
 import ProtectedRoute from './utils/ProtectedRoute.jsx';
 
 import AuthLayout from './layouts/AuthLayout.jsx';
@@ -38,9 +39,12 @@ import NotFoundPage from './pages/NotFoundPage.jsx';
 
 export function App() {
   useEffect(() => {
+    if (isMobileOSBlocked) return;
     useAuthStore.getState().initialize();
     useThemeStore.getState().initializeTheme();
   }, []);
+
+  if (isMobileOSBlocked) return <MobileOSBlocked />;
 
   return (
     <>

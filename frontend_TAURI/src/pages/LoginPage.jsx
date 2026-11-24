@@ -67,7 +67,7 @@ export const LoginPage = () => {
         </p>
         <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">Sign in to your account</h1>
         <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
-          Use your Geeta University email to continue.
+          Use your Geeta University email to continue. Student accounts can be active on one device at a time; signing in here signs out the previous device.
         </p>
       </div>
 

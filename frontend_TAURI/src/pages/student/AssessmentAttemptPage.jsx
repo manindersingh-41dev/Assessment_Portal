@@ -32,7 +32,10 @@ const CODE_SPEED_LIMIT_WPM = 85;
 const CODE_SPEED_SUSTAIN_MS = 3_000;
 const CODE_SPEED_GAP_TOLERANCE_MS = 750;
 const CHARACTERS_PER_WORD = 5;
-const MAX_INTEGRITY_WARNINGS = 5;
+const CODE_INSERTION_WINDOW_MS = 1_000;
+const CODE_INSERTION_WARNING_WORDS_PER_SECOND = 3;
+const CODE_INSERTION_LOCK_WORDS_PER_SECOND = 6;
+const MAX_INTEGRITY_WARNINGS = 3;
 const EXIT_EVENT_SUPPRESSION_MS = 3_000;
 
 const createSpeedBreachEventId = () => {
@@ -43,7 +46,7 @@ const createSpeedBreachEventId = () => {
   });
 };
 
-const countInsertedCharacters = (previousCode, nextCode) => {
+const getInsertedText = (previousCode, nextCode) => {
   let prefixLength = 0;
   const maxPrefix = Math.min(previousCode.length, nextCode.length);
   while (prefixLength < maxPrefix && previousCode[prefixLength] === nextCode[prefixLength]) {
@@ -60,8 +63,39 @@ const countInsertedCharacters = (previousCode, nextCode) => {
     suffixLength += 1;
   }
 
-  return Math.max(0, nextCode.length - prefixLength - suffixLength);
+  return {
+    text: nextCode.slice(prefixLength, nextCode.length - suffixLength),
+    startIndex: prefixLength,
+  };
 };
+
+const countInsertedWords = (previousCode, insertion) => {
+  const wordCount = (insertion.text.match(/\S+/g) || []).length;
+  const previousCharacter = previousCode[insertion.startIndex - 1];
+  const insertionJoinsPreviousWord = wordCount > 0
+    && insertion.text.length > 0
+    && !/\s/.test(insertion.text[0])
+    && previousCharacter
+    && !/\s/.test(previousCharacter);
+  return Math.max(0, wordCount - (insertionJoinsPreviousWord ? 1 : 0));
+};
+
+const getIntegrityLockDescription = (assignment) => {
+  if (assignment.cheating_flag_reason === 'high_code_writing_speed') {
+    return 'Code-writing speed stayed above 85 WPM for at least three seconds after persistent integrity warnings.';
+  }
+  if (assignment.cheating_flag_reason === 'bulk_code_insertion') {
+    return 'The code editor received more than 6 words in one second, so the coding window was locked immediately.';
+  }
+  if (assignment.cheating_flag_reason === 'rapid_code_insertion') {
+    return 'The code editor received more than 3 words per second after the persistent warning limit was reached.';
+  }
+  return 'A page-level integrity event occurred after persistent integrity warnings.';
+};
+
+const isCodeInsertionIntegrityEvent = (eventType) => (
+  eventType === 'rapid_code_insertion' || eventType === 'bulk_code_insertion'
+);
 
 const asList = (data) => {
   if (Array.isArray(data)) return data;
@@ -272,6 +306,10 @@ const AssessmentAttemptPage = () => {
   const attemptRootRef = useRef(null);
   const workspacePanelsRef = useRef(null);
   const codeInsertionSamplesRef = useRef([]);
+  const codeWordInsertionSamplesRef = useRef([]);
+  const rapidInsertionWarningActiveRef = useRef(false);
+  const rapidInsertionEventInFlightRef = useRef(false);
+  const bulkInsertionEventInFlightRef = useRef(false);
   const cheatingFlagRequestRef = useRef(false);
   const speedBreachActiveRef = useRef(false);
   const speedBreachInFlightRef = useRef(false);
@@ -598,6 +636,10 @@ const AssessmentAttemptPage = () => {
       setCheatingFlagSyncStatus('');
       setCurrentQuestionIndex(0);
       codeInsertionSamplesRef.current = [];
+      codeWordInsertionSamplesRef.current = [];
+      rapidInsertionWarningActiveRef.current = false;
+      rapidInsertionEventInFlightRef.current = false;
+      bulkInsertionEventInFlightRef.current = false;
       cheatingFlagRequestRef.current = false;
       speedBreachActiveRef.current = false;
       speedBreachInFlightRef.current = false;
@@ -1016,6 +1058,8 @@ const AssessmentAttemptPage = () => {
       if (previousFullscreen === true && !fullscreen) {
         exitEventSuppressedAtRef.current = Date.now();
         codeInsertionSamplesRef.current = [];
+        codeWordInsertionSamplesRef.current = [];
+        rapidInsertionWarningActiveRef.current = false;
         highSpeedStartedAtRef.current = null;
         lastHighSpeedObservationAtRef.current = null;
         speedBreachActiveRef.current = false;
@@ -1134,6 +1178,10 @@ const AssessmentAttemptPage = () => {
           setIntegrityWarningCount(Number(latestAssignment.integrity_warning_count) || 0);
           cheatingFlagRequestRef.current = false;
           codeInsertionSamplesRef.current = [];
+          codeWordInsertionSamplesRef.current = [];
+          rapidInsertionWarningActiveRef.current = false;
+          rapidInsertionEventInFlightRef.current = false;
+          bulkInsertionEventInFlightRef.current = false;
           highSpeedStartedAtRef.current = null;
           lastHighSpeedObservationAtRef.current = null;
           speedBreachActiveRef.current = false;
@@ -1160,7 +1208,13 @@ const AssessmentAttemptPage = () => {
     return document.fullscreenElement === attemptRootRef.current;
   };
 
-  const recordIntegrityEvent = (eventType, eventId, speedWpm = null, sustainedMs = null) => {
+  const recordIntegrityEvent = (
+    eventType,
+    eventId,
+    speedWpm = null,
+    sustainedMs = null,
+    wordsPerSecond = null,
+  ) => {
     if (
       !assignment?.id
       || assignment.status !== 'started'
@@ -1172,6 +1226,11 @@ const AssessmentAttemptPage = () => {
         speedBreachEventIdRef.current = null;
         pendingSpeedBreachEventIdRef.current = null;
       }
+      if (eventType === 'rapid_code_insertion') {
+        rapidInsertionWarningActiveRef.current = false;
+        rapidInsertionEventInFlightRef.current = false;
+      }
+      if (eventType === 'bulk_code_insertion') bulkInsertionEventInFlightRef.current = false;
       return;
     }
     setCheatingFlagSyncStatus('saving');
@@ -1180,6 +1239,7 @@ const AssessmentAttemptPage = () => {
       reason: eventType,
       speed_wpm: speedWpm,
       sustained_ms: sustainedMs,
+      words_per_second: wordsPerSecond,
       event_id: eventId,
     }).then((response) => {
       const result = response.data || {};
@@ -1220,6 +1280,11 @@ const AssessmentAttemptPage = () => {
         lastHighSpeedObservationAtRef.current = null;
         codeInsertionSamplesRef.current = [];
       }
+      if (eventType === 'rapid_code_insertion') {
+        rapidInsertionWarningActiveRef.current = false;
+        rapidInsertionEventInFlightRef.current = false;
+      }
+      if (eventType === 'bulk_code_insertion') bulkInsertionEventInFlightRef.current = false;
       setCheatingFlagSyncStatus('failed');
       addNotification(
         getErrorMessage(eventError, 'The integrity event could not be saved to the server.'),
@@ -1227,7 +1292,48 @@ const AssessmentAttemptPage = () => {
       );
     }).finally(() => {
       if (eventType === 'high_code_writing_speed') speedBreachInFlightRef.current = false;
+      if (eventType === 'rapid_code_insertion') rapidInsertionEventInFlightRef.current = false;
+      if (eventType === 'bulk_code_insertion') bulkInsertionEventInFlightRef.current = false;
     });
+  };
+
+  const reportCodeInsertionRate = (wordsPerSecond) => {
+    if (
+      !assignment?.id
+      || assignment.status !== 'started'
+      || finalized
+      || cheatingFlagRequestRef.current
+      || intentionalExitRef.current
+    ) return;
+
+    if (wordsPerSecond > CODE_INSERTION_LOCK_WORDS_PER_SECOND) {
+      if (bulkInsertionEventInFlightRef.current) return;
+      bulkInsertionEventInFlightRef.current = true;
+      recordIntegrityEvent(
+        'bulk_code_insertion',
+        createSpeedBreachEventId(),
+        null,
+        null,
+        wordsPerSecond,
+      );
+      return;
+    }
+
+    if (
+      wordsPerSecond > CODE_INSERTION_WARNING_WORDS_PER_SECOND
+      && !rapidInsertionWarningActiveRef.current
+      && !rapidInsertionEventInFlightRef.current
+    ) {
+      rapidInsertionWarningActiveRef.current = true;
+      rapidInsertionEventInFlightRef.current = true;
+      recordIntegrityEvent(
+        'rapid_code_insertion',
+        createSpeedBreachEventId(),
+        null,
+        null,
+        wordsPerSecond,
+      );
+    }
   };
 
   const recordHighCodeSpeed = async (speedWpm, sustainedMs) => {
@@ -1254,6 +1360,8 @@ const AssessmentAttemptPage = () => {
     setIsFullscreen(fullscreen);
     if (!fullscreen) {
       codeInsertionSamplesRef.current = [];
+      codeWordInsertionSamplesRef.current = [];
+      rapidInsertionWarningActiveRef.current = false;
       highSpeedStartedAtRef.current = null;
       lastHighSpeedObservationAtRef.current = null;
       speedBreachActiveRef.current = false;
@@ -1297,6 +1405,21 @@ const AssessmentAttemptPage = () => {
       && assignment?.status === 'started'
       && isFullscreenCodingWindowActive()
     ) {
+      const insertion = getInsertedText(previousCode, nextCode);
+      const now = Date.now();
+      const recentWordSamples = codeWordInsertionSamplesRef.current.filter(
+        (sample) => now - sample.at < CODE_INSERTION_WINDOW_MS,
+      );
+      const insertedWords = countInsertedWords(previousCode, insertion);
+      if (insertedWords > 0) recentWordSamples.push({ at: now, words: insertedWords });
+      codeWordInsertionSamplesRef.current = recentWordSamples;
+      const wordsPerSecond = recentWordSamples.reduce((total, sample) => total + sample.words, 0);
+      if (wordsPerSecond <= CODE_INSERTION_WARNING_WORDS_PER_SECOND) {
+        rapidInsertionWarningActiveRef.current = false;
+      } else {
+        reportCodeInsertionRate(wordsPerSecond);
+      }
+
       if (inputMetadata?.repeat) {
         codeInsertionSamplesRef.current = [];
         highSpeedStartedAtRef.current = null;
@@ -1304,7 +1427,7 @@ const AssessmentAttemptPage = () => {
         speedBreachActiveRef.current = false;
         speedBreachEventIdRef.current = null;
       } else {
-        const insertedTextCharacters = countInsertedCharacters(previousCode, nextCode);
+        const insertedTextCharacters = insertion.text.length;
         const insertedCharacters = inputMetadata?.isPrintable
           ? Math.min(1, insertedTextCharacters)
           : insertedTextCharacters;
@@ -1611,11 +1734,11 @@ const AssessmentAttemptPage = () => {
             )}
             {integrityWarningCount > 0 && (
               <div className="rounded-xl border border-amber-700 bg-amber-950/60 p-4 text-sm leading-6 text-amber-100" role="alert">
-                <strong>Persistent integrity warnings: {integrityWarningCount} of {MAX_INTEGRITY_WARNINGS}.</strong>{' '}
+                <strong>Persistent integrity warnings: {Math.min(integrityWarningCount, MAX_INTEGRITY_WARNINGS)} of {MAX_INTEGRITY_WARNINGS}.</strong>{' '}
                 Do not use AI or scripts to write code. Do not try to paste code using any alternative method.{' '}
                 {integrityWarningCount >= MAX_INTEGRITY_WARNINGS
-                  ? 'This is your final warning. Another speed or page-integrity event will lock the coding window.'
-                  : `After ${MAX_INTEGRITY_WARNINGS} warnings, another speed or page-integrity event will lock the coding window.`}
+                  ? 'This is your final warning. Another integrity event will lock the coding window.'
+                  : `After ${MAX_INTEGRITY_WARNINGS} warnings, another integrity event will lock the coding window.`}
               </div>
             )}
           </div>
@@ -1654,11 +1777,11 @@ const AssessmentAttemptPage = () => {
 
       {integrityWarningCount > 0 && !assignment.is_flagged_cheating && (
         <div className="shrink-0 border-b border-amber-700 bg-amber-950/70 px-4 py-3 text-sm leading-6 text-amber-100" role="alert">
-          <strong>Persistent integrity warnings: {integrityWarningCount} of {MAX_INTEGRITY_WARNINGS}.</strong>{' '}
+          <strong>Persistent integrity warnings: {Math.min(integrityWarningCount, MAX_INTEGRITY_WARNINGS)} of {MAX_INTEGRITY_WARNINGS}.</strong>{' '}
           Do not use AI or scripts to write code. Do not try to paste code using any alternative method.{' '}
           {integrityWarningCount >= MAX_INTEGRITY_WARNINGS
-            ? 'This is your final warning. Another speed or page-integrity event will lock the coding window.'
-            : `After ${MAX_INTEGRITY_WARNINGS} warnings, another speed or page-integrity event will lock the coding window.`}
+            ? 'This is your final warning. Another integrity event will lock the coding window.'
+            : `After ${MAX_INTEGRITY_WARNINGS} warnings, another integrity event will lock the coding window.`}
         </div>
       )}
 
@@ -1670,7 +1793,7 @@ const AssessmentAttemptPage = () => {
       >
         <p className="text-sm leading-6 text-slate-600 dark:text-slate-300">{integrityWarningMessage}</p>
         <p className="mt-3 text-sm font-semibold text-amber-700 dark:text-amber-300">
-          Warnings given: {integrityWarningCount} of {MAX_INTEGRITY_WARNINGS}.
+          Warnings given: {Math.min(integrityWarningCount, MAX_INTEGRITY_WARNINGS)} of {MAX_INTEGRITY_WARNINGS}.
         </p>
       </Modal>
 
@@ -1693,14 +1816,17 @@ const AssessmentAttemptPage = () => {
             <ShieldAlert size={32} className="mx-auto text-rose-400" />
             <h2 id="cheating-flag-title" className="text-xl font-bold text-white">Coding screen locked</h2>
             <p className="text-sm leading-6 text-slate-300">
-              {assignment.cheating_flag_reason === 'high_code_writing_speed'
-                ? 'Code-writing speed stayed above 85 WPM for at least three seconds after persistent integrity warnings.'
-                : 'A page-level integrity event occurred after persistent integrity warnings.'}{' '}
+              {getIntegrityLockDescription(assignment)}{' '}
               This coding window is locked for faculty review.
             </p>
             {assignment.cheating_flag_reason === 'high_code_writing_speed' && (
               <p className="text-sm font-semibold text-rose-200">
               Recorded speed: {Math.round(assignment.cheating_flag_speed_wpm || 0)} WPM
+              </p>
+            )}
+            {isCodeInsertionIntegrityEvent(assignment.cheating_flag_reason) && (
+              <p className="text-sm font-semibold text-rose-200">
+                Recorded insertion rate: {(Number(assignment.cheating_flag_words_per_second) || 0).toFixed(1)} words per second
               </p>
             )}
             {cheatingFlagSyncStatus === 'failed' && (
@@ -1736,9 +1862,7 @@ const AssessmentAttemptPage = () => {
         <div className="flex shrink-0 items-center gap-2 border-b border-rose-900/70 bg-rose-950/70 px-4 py-3 text-sm text-rose-100" role="alert">
           <ShieldAlert size={17} />
           <span>
-            Integrity lock: {assignment.cheating_flag_reason === 'high_code_writing_speed'
-              ? `code-writing speed reached ${Math.round(assignment.cheating_flag_speed_wpm || 0)} WPM (limit: 85 WPM).`
-              : `page-level event: ${String(assignment.cheating_flag_reason || 'integrity check').replaceAll('_', ' ')}.`}
+            Integrity lock: {getIntegrityLockDescription(assignment)}
             {' '}{cheatingFlagSyncStatus === 'failed' ? 'The flag could not be saved to the server.' : cheatingFlagSyncStatus === 'saving' ? 'Saving the flag…' : 'This attempt is flagged for faculty review.'}
           </span>
         </div>

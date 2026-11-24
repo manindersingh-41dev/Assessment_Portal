@@ -75,6 +75,7 @@ class AssessmentAssignment(UUIDModel, TimeStampedModel, CreatedByModel):
     )
     cheating_flag_reason = models.CharField(max_length=64, blank=True)
     cheating_flag_speed_wpm = models.FloatField(null=True, blank=True)
+    cheating_flag_words_per_second = models.FloatField(null=True, blank=True)
     cheating_flag_sustained_ms = models.PositiveIntegerField(null=True, blank=True)
     cheating_flagged_at = models.DateTimeField(null=True, blank=True)
     cheating_flag_cleared_at = models.DateTimeField(null=True, blank=True)

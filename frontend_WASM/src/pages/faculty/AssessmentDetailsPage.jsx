@@ -337,6 +337,8 @@ const AssessmentDetailsPage = () => {
                       <p className="mt-1">
                         {assignment.cheating_flag_reason === 'high_code_writing_speed'
                           ? `Code-writing speed: ${Math.round(assignment.cheating_flag_speed_wpm || 0)} WPM`
+                          : ['rapid_code_insertion', 'bulk_code_insertion'].includes(assignment.cheating_flag_reason)
+                            ? `Code insertion rate: ${(Number(assignment.cheating_flag_words_per_second) || 0).toFixed(1)} words/second`
                           : `Page-level event: ${String(assignment.cheating_flag_reason || 'integrity check').replaceAll('_', ' ')}`}
                       </p>
                       {assignment.cheating_flag_sustained_ms > 0 && (

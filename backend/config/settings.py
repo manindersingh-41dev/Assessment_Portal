@@ -196,7 +196,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 REST_FRAMEWORK = {
     # Use JWT as the default authentication class.
     "DEFAULT_AUTHENTICATION_CLASSES": (
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
+        "users.session_auth.SingleStudentSessionJWTAuthentication",
     ),
     # Require authentication by default; views can opt out with permission classes.
     "DEFAULT_PERMISSION_CLASSES": (

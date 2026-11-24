@@ -18,7 +18,6 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.views import APIView
 from rest_framework.pagination import PageNumberPagination
 from rest_framework_simplejwt.tokens import RefreshToken
-from rest_framework_simplejwt.views import TokenObtainPairView
 from django.db import IntegrityError, transaction
 from django.db.models import (
     Case,
@@ -54,6 +53,7 @@ from .serializers import (
     FacultyAssessmentPreferenceSerializer,
 )
 from .services import AuthenticationService, UserService
+from .session_auth import SESSION_CLAIM, issue_session_refresh_token
 from .permissions import IsStudent, IsFaculty, IsAdmin, IsEmailVerified, IsApprovedFaculty
 
 logger = logging.getLogger(__name__)
@@ -710,7 +710,7 @@ class VerifyEmailView(viewsets.ViewSet):
                     )
 
                     if can_login_after_verification:
-                        refresh = RefreshToken.for_user(user)
+                        refresh = issue_session_refresh_token(user)
                         response_data.update({
                             'auto_login': True,
                             'user': {
@@ -880,7 +880,7 @@ class LoginView(viewsets.ViewSet):
                     )
 
                     # Generate JWT tokens
-                    refresh = RefreshToken.for_user(user)
+                    refresh = issue_session_refresh_token(user)
 
                     return Response(
                         {
@@ -959,6 +959,15 @@ class LogoutView(viewsets.ViewSet):
                     token.blacklist()
                 except Exception:
                     pass
+
+            if request.user.role == User.ROLE_STUDENT:
+                token_session_id = request.auth.get(SESSION_CLAIM) if request.auth else None
+                if (
+                    request.user.active_session_id is not None
+                    and str(request.user.active_session_id) == str(token_session_id)
+                ):
+                    request.user.active_session_id = None
+                    request.user.save(update_fields=['active_session_id', 'updated_at'])
 
             return Response(
                 {'message': 'Logout successful'},

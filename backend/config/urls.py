@@ -15,10 +15,11 @@ The `urlpatterns` list routes URLs to views. API routes are versioned under
 
 from django.contrib import admin
 from django.urls import include, path
-from rest_framework_simplejwt.views import (
-    TokenObtainPairView,
-    TokenRefreshView,
-    TokenVerifyView,
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView, TokenVerifyView
+from users.session_auth import (
+    PortalTokenObtainPairSerializer,
+    PortalTokenRefreshSerializer,
+    PortalTokenVerifySerializer,
 )
 from users.views import ClearStudentLoginLockView, StudentDirectoryView
 
@@ -30,9 +31,21 @@ urlpatterns = [
     path("admin/", admin.site.urls),
 
     # Standard JWT endpoints
-    path("api/token/", TokenObtainPairView.as_view(), name="token_obtain_pair"),
-    path("api/token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
-    path("api/token/verify/", TokenVerifyView.as_view(), name="token_verify"),
+    path(
+        "api/token/",
+        TokenObtainPairView.as_view(serializer_class=PortalTokenObtainPairSerializer),
+        name="token_obtain_pair",
+    ),
+    path(
+        "api/token/refresh/",
+        TokenRefreshView.as_view(serializer_class=PortalTokenRefreshSerializer),
+        name="token_refresh",
+    ),
+    path(
+        "api/token/verify/",
+        TokenVerifyView.as_view(serializer_class=PortalTokenVerifySerializer),
+        name="token_verify",
+    ),
 
     # App endpoints
     path("api/auth/", include("users.urls")),

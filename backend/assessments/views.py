@@ -56,7 +56,9 @@ from .notifications import (
     queue_notification_group,
 )
 
-MAX_INTEGRITY_WARNINGS = 5
+MAX_INTEGRITY_WARNINGS = 3
+CODE_INSERTION_WARNING_WORDS_PER_SECOND = 3
+CODE_INSERTION_LOCK_WORDS_PER_SECOND = 6
 
 
 class AssessmentPagination(PageNumberPagination):
@@ -624,6 +626,7 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
             )
 
         speed_wpm = None
+        words_per_second = None
         sustained_ms = None
         if event_type == AssessmentIntegrityEvent.EventType.SPEED:
             try:
@@ -634,6 +637,32 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
                 sustained_ms = int(request.data.get('sustained_ms'))
             except (TypeError, ValueError):
                 sustained_ms = 0
+        if event_type in (
+            AssessmentIntegrityEvent.EventType.RAPID_CODE_INSERTION,
+            AssessmentIntegrityEvent.EventType.BULK_CODE_INSERTION,
+        ):
+            try:
+                words_per_second = float(request.data.get('words_per_second'))
+            except (TypeError, ValueError):
+                words_per_second = float('nan')
+            if not math.isfinite(words_per_second) or words_per_second <= CODE_INSERTION_WARNING_WORDS_PER_SECOND:
+                return Response(
+                    {'error': 'Code insertion must exceed 3 words per second.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if (
+                event_type == AssessmentIntegrityEvent.EventType.BULK_CODE_INSERTION
+                and words_per_second <= CODE_INSERTION_LOCK_WORDS_PER_SECOND
+            ):
+                return Response(
+                    {'error': 'An immediate coding lock requires more than 6 words per second.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if (
+                event_type == AssessmentIntegrityEvent.EventType.RAPID_CODE_INSERTION
+                and words_per_second > CODE_INSERTION_LOCK_WORDS_PER_SECOND
+            ):
+                event_type = AssessmentIntegrityEvent.EventType.BULK_CODE_INSERTION
         submitted_event_id = request.data.get('event_id')
         if submitted_event_id:
             try:
@@ -689,12 +718,20 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
                         status=status.HTTP_400_BAD_REQUEST,
                     )
 
-                if assignment.is_flagged_cheating or student.integrity_warning_count >= MAX_INTEGRITY_WARNINGS:
+                immediate_code_insertion_lock = (
+                    event_type == AssessmentIntegrityEvent.EventType.BULK_CODE_INSERTION
+                )
+                if (
+                    immediate_code_insertion_lock
+                    or assignment.is_flagged_cheating
+                    or student.integrity_warning_count >= MAX_INTEGRITY_WARNINGS
+                ):
                     outcome = AssessmentIntegrityEvent.Outcome.LOCKED
                     if not assignment.is_flagged_cheating:
                         assignment.is_flagged_cheating = True
                         assignment.cheating_flag_reason = event_type
                         assignment.cheating_flag_speed_wpm = speed_wpm
+                        assignment.cheating_flag_words_per_second = words_per_second
                         assignment.cheating_flag_sustained_ms = sustained_ms
                         assignment.cheating_flagged_at = timezone.now()
                         assignment.cheating_flag_cleared_at = None
@@ -703,6 +740,7 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
                             'is_flagged_cheating',
                             'cheating_flag_reason',
                             'cheating_flag_speed_wpm',
+                            'cheating_flag_words_per_second',
                             'cheating_flag_sustained_ms',
                             'cheating_flagged_at',
                             'cheating_flag_cleared_at',
@@ -720,6 +758,7 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
                     event_id=event_id,
                     event_type=event_type,
                     speed_wpm=speed_wpm,
+                    words_per_second=words_per_second,
                     sustained_ms=sustained_ms,
                     outcome=outcome,
                 )
@@ -730,14 +769,25 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
             locked = breach_event.outcome == AssessmentIntegrityEvent.Outcome.LOCKED
 
         if locked:
-            message = (
-                f'This coding window is locked after {MAX_INTEGRITY_WARNINGS} persistent '
-                'integrity warnings and another policy event.'
-            )
+            if event_type == AssessmentIntegrityEvent.EventType.BULK_CODE_INSERTION:
+                message = (
+                    'Code insertion exceeded 6 words per second. '
+                    'This coding window is locked immediately.'
+                )
+            else:
+                message = (
+                    f'This coding window is locked after {MAX_INTEGRITY_WARNINGS} persistent '
+                    'integrity warnings and another policy event.'
+                )
         else:
             event_messages = {
                 AssessmentIntegrityEvent.EventType.SPEED:
                     'Code-writing speed stayed above the 85 WPM limit for at least three seconds.',
+                AssessmentIntegrityEvent.EventType.RAPID_CODE_INSERTION:
+                    f'The code editor received more than {CODE_INSERTION_WARNING_WORDS_PER_SECOND} '
+                    'words per second.',
+                AssessmentIntegrityEvent.EventType.BULK_CODE_INSERTION:
+                    'Code insertion exceeded 6 words per second.',
                 AssessmentIntegrityEvent.EventType.TAB_HIDDEN:
                     'The assessment tab became hidden or you switched away from it.',
                 AssessmentIntegrityEvent.EventType.WINDOW_BLUR:
@@ -750,8 +800,7 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
                 'The next assessment-integrity event will lock this coding window.'
                 if warning_count >= MAX_INTEGRITY_WARNINGS
                 else f'Integrity warning ({warning_count} of {MAX_INTEGRITY_WARNINGS}). '
-                f'The next assessment-integrity event after warning {MAX_INTEGRITY_WARNINGS} '
-                'will lock this coding window.'
+                f'After {MAX_INTEGRITY_WARNINGS} warnings, the next event will lock this coding window.'
             )
             message = (
                 f'{event_messages[event_type]} {warning_kind} '

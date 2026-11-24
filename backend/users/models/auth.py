@@ -103,6 +103,13 @@ class User(AbstractUser):
         help_text="Lifetime count of integrity warnings given to this student.",
     )
 
+    active_session_id = models.UUIDField(
+        null=True,
+        blank=True,
+        editable=False,
+        help_text="Current student session; a new login invalidates older student tokens.",
+    )
+
     # Account status
     is_active = models.BooleanField(
         default=True,
