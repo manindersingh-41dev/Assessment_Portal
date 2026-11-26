@@ -34,6 +34,7 @@ const AssessmentDetailsPage = () => {
   const [reopeningWindow, setReopeningWindow] = useState(false);
   const [retryingNotificationId, setRetryingNotificationId] = useState(null);
   const [unlockingAssignmentId, setUnlockingAssignmentId] = useState(null);
+  const [clearingWarningsAssignmentId, setClearingWarningsAssignmentId] = useState(null);
   const [loadError, setLoadError] = useState('');
   const { id } = useParams();
   const navigate = useNavigate();
@@ -173,11 +174,29 @@ const AssessmentDetailsPage = () => {
           item.id === assignmentId ? { ...item, ...updatedAssignment } : item
         )));
       }
-      addNotification('Student coding lock removed and warning count reset to zero.', 'success');
+      addNotification('Coding lock removed and this assessment warning count reset to zero.', 'success');
     } catch (error) {
       addNotification(error.response?.data?.error || 'Could not remove the coding lock.', 'error');
     } finally {
       setUnlockingAssignmentId(null);
+    }
+  };
+
+  const clearIntegrityWarnings = async (assignmentId) => {
+    setClearingWarningsAssignmentId(assignmentId);
+    try {
+      const response = await api.post(endpoints.assessments.clearIntegrityWarnings(assignmentId));
+      const updatedAssignment = response.data?.assignment;
+      if (updatedAssignment) {
+        setAssignments((current) => current.map((item) => (
+          item.id === assignmentId ? { ...item, ...updatedAssignment } : item
+        )));
+      }
+      addNotification('Integrity warnings cleared for this assessment.', 'success');
+    } catch (error) {
+      addNotification(error.response?.data?.error || 'Could not clear the student warnings.', 'error');
+    } finally {
+      setClearingWarningsAssignmentId(null);
     }
   };
 
@@ -319,6 +338,20 @@ const AssessmentDetailsPage = () => {
                     <p className="mt-0.5 truncate text-xs text-slate-500">{assignment.student_email || assignment.student.email}</p>
                   )}
                   <div className="mt-2"><Badge variant={assignment.status === 'submitted' || assignment.status === 'graded' ? 'success' : 'neutral'}>{assignment.status || 'assigned'}</Badge></div>
+                  {Number(assignment.integrity_warning_count) > 0 && (
+                    <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+                      <span>Integrity warnings: {assignment.integrity_warning_count} of 3</span>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        loading={clearingWarningsAssignmentId === assignment.id}
+                        disabled={clearingWarningsAssignmentId !== null && clearingWarningsAssignmentId !== assignment.id}
+                        onClick={() => clearIntegrityWarnings(assignment.id)}
+                      >
+                        Clear warnings
+                      </Button>
+                    </div>
+                  )}
                   {new Date(assessment.end_time || assessment.end_datetime) >= new Date()
                     && (assignment.status === 'submitted' || assignment.status === 'graded') && (
                     <Button

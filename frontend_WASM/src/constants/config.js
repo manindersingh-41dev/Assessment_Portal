@@ -61,6 +61,7 @@ export const config = {
         assignmentFlagStatus: (id) => `/assessments/assignments/${id}/flag-status/`,
         recordIntegrityEvent: (id) => `/assessments/assignments/${id}/integrity-event/`,
         clearCheatingFlag: (id) => `/assessments/assignments/${id}/clear-cheating-flag/`,
+        clearIntegrityWarnings: (id) => `/assessments/assignments/${id}/clear-integrity-warnings/`,
         reopenAssignment: (id) => `/assessments/assignments/${id}/reopen/`,
         submitAssignment: (id) => `/assessments/assignments/${id}/submit/`,
         assignmentDrafts: (id) => `/assessments/assignments/${id}/drafts/`,

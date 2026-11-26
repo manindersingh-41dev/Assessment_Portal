@@ -146,7 +146,7 @@ const StudentAccessPage = () => {
     try {
       await api.post(config.api.endpoints.assessments.clearCheatingFlag(assignment.id));
       setLockedAssignments((current) => current.filter((item) => item.id !== assignment.id));
-      addNotification('Coding lock removed and student warning count reset to zero.', 'success');
+      addNotification('Coding lock removed and this assessment warning count reset to zero.', 'success');
     } catch (error) {
       addNotification(error.response?.data?.error || 'Could not remove the coding lock.', 'error');
     } finally {

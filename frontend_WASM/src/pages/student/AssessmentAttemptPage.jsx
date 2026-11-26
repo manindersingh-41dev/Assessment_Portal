@@ -22,6 +22,10 @@ import { useNotificationStore } from '../../store/notificationStore';
 import api from '../../api/client';
 import { config } from '../../constants/config';
 import { parseIndiaDateTime } from '../../utils/indiaDateTime.js';
+import {
+  detectKnownBrowserExtensions,
+  EXTENSION_MARKER_ATTRIBUTES,
+} from '../../utils/knownBrowserExtensionDetector.js';
 import { createWasmRunner, RUNNER_TYPE, WASM_COMPILER_VERSION, WASM_RUNNER_VERSION } from '../../runner';
 
 const endpoints = config.api.endpoints;
@@ -70,13 +74,13 @@ const getInsertedText = (previousCode, nextCode) => {
 };
 
 const countInsertedWords = (previousCode, insertion) => {
-  const wordCount = (insertion.text.match(/\S+/g) || []).length;
+  const wordCount = (insertion.text.match(/[A-Za-z_][A-Za-z0-9_]*|\d+(?:\.\d+)?/g) || []).length;
   const previousCharacter = previousCode[insertion.startIndex - 1];
   const insertionJoinsPreviousWord = wordCount > 0
     && insertion.text.length > 0
-    && !/\s/.test(insertion.text[0])
+    && /^[A-Za-z0-9_]/.test(insertion.text[0])
     && previousCharacter
-    && !/\s/.test(previousCharacter);
+    && /[A-Za-z0-9_]/.test(previousCharacter);
   return Math.max(0, wordCount - (insertionJoinsPreviousWord ? 1 : 0));
 };
 
@@ -272,11 +276,14 @@ const AssessmentAttemptPage = () => {
   const [integrityWarningCount, setIntegrityWarningCount] = useState(0);
   const [integrityWarningMessage, setIntegrityWarningMessage] = useState('');
   const [showIntegrityWarning, setShowIntegrityWarning] = useState(false);
+  const [detectedExtensions, setDetectedExtensions] = useState([]);
   const lastObservedFullscreenRef = useRef(null);
   const reportPageIntegrityEventRef = useRef(null);
   const intentionalExitRef = useRef(false);
   const exitEventSuppressedAtRef = useRef(0);
   const pendingWindowBlurTimerRef = useRef(null);
+  const detectedExtensionsRef = useRef([]);
+  const reloadAfterExtensionSettingsRef = useRef(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isMobileKeyboardOpen, setIsMobileKeyboardOpen] = useState(false);
   const [visualViewportHeight, setVisualViewportHeight] = useState(0);
@@ -323,6 +330,44 @@ const AssessmentAttemptPage = () => {
   const highSpeedStartedAtRef = useRef(null);
   const lastHighSpeedObservationAtRef = useRef(null);
 
+  detectedExtensionsRef.current = detectedExtensions;
+
+  useEffect(() => {
+    let mutationDebounce = null;
+    const syncDetectedExtensions = () => {
+      const nextExtensions = detectKnownBrowserExtensions();
+      if (
+        nextExtensions.length === detectedExtensionsRef.current.length
+        && nextExtensions.every((name, index) => name === detectedExtensionsRef.current[index])
+      ) return;
+
+      detectedExtensionsRef.current = nextExtensions;
+      setDetectedExtensions(nextExtensions);
+    };
+    const scheduleDetection = () => {
+      if (mutationDebounce !== null) window.clearTimeout(mutationDebounce);
+      mutationDebounce = window.setTimeout(syncDetectedExtensions, 200);
+    };
+    const observer = new MutationObserver(scheduleDetection);
+
+    syncDetectedExtensions();
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: EXTENSION_MARKER_ATTRIBUTES,
+      childList: true,
+      subtree: true,
+    });
+    const detectionInterval = window.setInterval(syncDetectedExtensions, 1500);
+    document.addEventListener('visibilitychange', syncDetectedExtensions);
+
+    return () => {
+      observer.disconnect();
+      document.removeEventListener('visibilitychange', syncDetectedExtensions);
+      window.clearInterval(detectionInterval);
+      if (mutationDebounce !== null) window.clearTimeout(mutationDebounce);
+    };
+  }, []);
+
   useEffect(() => {
     runnerGenerationRef.current += 1;
     return () => {
@@ -360,9 +405,11 @@ const AssessmentAttemptPage = () => {
   const currentSubmission = currentQuestion ? submissionStatuses[currentQuestion.id] : null;
   const currentSubmissionPending = Boolean(currentSubmission && !FINAL_STATES.has(currentSubmission.status));
   const currentQuestionSubmitting = Boolean(currentQuestion && submittingQuestionIds.has(currentQuestion.id));
+  const isExtensionBlocked = detectedExtensions.length > 0;
   const canEdit = isFullscreen
     && assignment?.status === 'started'
     && !assignment?.is_flagged_cheating
+    && !isExtensionBlocked
     && !finalized
     && (assessment?.is_timed === false || remainingSeconds > 0);
   const questionStatuses = useMemo(() => questions.map((question) => submissionStatuses[question.id]), [questions, submissionStatuses]);
@@ -839,6 +886,7 @@ const AssessmentAttemptPage = () => {
       || !questions.length
       || finalized
       || submitLockRef.current
+      || (!automatic && detectedExtensionsRef.current.length > 0)
     ) return;
     submitLockRef.current = true;
     setSubmitting(true);
@@ -1092,20 +1140,32 @@ const AssessmentAttemptPage = () => {
       return fullscreen;
     };
     const onVisibilityChange = async () => {
-      if (document.visibilityState !== 'hidden' || finalized) return;
+      if (document.visibilityState !== 'hidden') {
+        if (reloadAfterExtensionSettingsRef.current && detectedExtensionsRef.current.length > 0) {
+          reloadAfterExtensionSettingsRef.current = false;
+          await flushDrafts();
+          window.location.reload();
+        } else if (detectedExtensionsRef.current.length === 0) {
+          reloadAfterExtensionSettingsRef.current = false;
+        }
+        return;
+      }
+      if (finalized) return;
       if (pendingWindowBlurTimerRef.current !== null) {
         window.clearTimeout(pendingWindowBlurTimerRef.current);
         pendingWindowBlurTimerRef.current = null;
       }
+      const extensionLockActive = detectedExtensionsRef.current.length > 0;
+      if (extensionLockActive) reloadAfterExtensionSettingsRef.current = true;
       Object.entries(codeRef.current).forEach(([questionId, sourceCode]) => {
         saveDraftNow(questionId, sourceCode);
       });
-      if (await syncFullscreen()) {
+      if (await syncFullscreen() && !extensionLockActive) {
         reportPageIntegrityEventRef.current?.('tab_hidden');
       }
     };
     const onWindowBlur = () => {
-      if (document.visibilityState === 'hidden') return;
+      if (document.visibilityState === 'hidden' || detectedExtensionsRef.current.length > 0) return;
       if (pendingWindowBlurTimerRef.current !== null) {
         window.clearTimeout(pendingWindowBlurTimerRef.current);
       }
@@ -1124,7 +1184,14 @@ const AssessmentAttemptPage = () => {
       event.stopImmediatePropagation();
     };
     const onBeforeInput = (event) => {
-      if (!['insertFromPaste', 'insertFromDrop'].includes(event.inputType)) return;
+      if (![
+        'insertFromPaste',
+        'insertFromDrop',
+        'insertFromYank',
+        'insertReplacementText',
+        'insertFromComposition',
+        'insertFromDictation',
+      ].includes(event.inputType)) return;
       event.preventDefault();
       event.stopImmediatePropagation();
     };
@@ -1171,19 +1238,18 @@ const AssessmentAttemptPage = () => {
       }
       if (fullscreenPoll) window.clearInterval(fullscreenPoll);
     };
-  }, [assignment?.status, finalized, saveDraftNow]);
+  }, [assignment?.status, finalized, flushDrafts, saveDraftNow]);
 
   useEffect(() => {
     if (
       !assignment?.id
-      || !assignment.is_flagged_cheating
-      || cheatingFlagSyncStatus !== 'saved'
+      || assignment.status !== 'started'
       || finalized
     ) return undefined;
 
     const controller = new AbortController();
     let requestInFlight = false;
-    const refreshCheatingFlag = async () => {
+    const refreshIntegrityStatus = async () => {
       if (requestInFlight || controller.signal.aborted) return;
       requestInFlight = true;
       try {
@@ -1192,14 +1258,11 @@ const AssessmentAttemptPage = () => {
           { signal: controller.signal },
         );
         if (controller.signal.aborted) return;
+        const wasFlagged = Boolean(assignment.is_flagged_cheating);
         const latestAssignment = { ...assignment, ...response.data };
         setAssignment(latestAssignment);
-        setIntegrityWarningCount((count) => Math.max(
-          count,
-          Number(response.data.integrity_warning_count) || 0,
-        ));
-        if (!latestAssignment.is_flagged_cheating) {
-          setIntegrityWarningCount(Number(response.data.integrity_warning_count) || 0);
+        setIntegrityWarningCount(Number(response.data.integrity_warning_count) || 0);
+        if (wasFlagged && !latestAssignment.is_flagged_cheating) {
           cheatingFlagRequestRef.current = false;
           codeInsertionSamplesRef.current = [];
           codeWordInsertionSamplesRef.current = [];
@@ -1214,18 +1277,18 @@ const AssessmentAttemptPage = () => {
           addNotification('Faculty removed the coding lock. You may continue.', 'success');
         }
       } catch {
-        // Keep the lock in place while retrying the assignment status check.
+        // Retain the last known warning and lock state until the next refresh.
       } finally {
         requestInFlight = false;
       }
     };
 
-    const interval = window.setInterval(refreshCheatingFlag, 15000);
+    const interval = window.setInterval(refreshIntegrityStatus, 15000);
     return () => {
       controller.abort();
       window.clearInterval(interval);
     };
-  }, [addNotification, assignment?.id, assignment?.is_flagged_cheating, cheatingFlagSyncStatus, finalized]);
+  }, [addNotification, assignment?.id, assignment?.is_flagged_cheating, assignment?.status, finalized]);
 
   const isFullscreenCodingWindowActive = () => {
     if (getTauriWindow()) return lastObservedFullscreenRef.current === true;
@@ -1243,6 +1306,7 @@ const AssessmentAttemptPage = () => {
       !assignment?.id
       || assignment.status !== 'started'
       || !isFullscreenCodingWindowActive()
+      || detectedExtensionsRef.current.length > 0
     ) {
       if (eventType === 'high_code_writing_speed') {
         speedBreachActiveRef.current = false;
@@ -1284,10 +1348,7 @@ const AssessmentAttemptPage = () => {
           return { ...current, ...savedAssignment };
         });
       }
-      setIntegrityWarningCount((count) => Math.max(
-        count,
-        Number(result.integrity_warning_count) || 0,
-      ));
+      setIntegrityWarningCount(Number(result.integrity_warning_count) || 0);
       if (result.locked) {
         cheatingFlagRequestRef.current = true;
         setCheatingFlagSyncStatus('saved');
@@ -1328,6 +1389,7 @@ const AssessmentAttemptPage = () => {
       || finalized
       || cheatingFlagRequestRef.current
       || intentionalExitRef.current
+      || detectedExtensionsRef.current.length > 0
     ) return;
 
     if (wordsPerSecond > CODE_INSERTION_LOCK_WORDS_PER_SECOND) {
@@ -1366,6 +1428,7 @@ const AssessmentAttemptPage = () => {
       || assignment.status !== 'started'
       || cheatingFlagRequestRef.current
       || speedBreachInFlightRef.current
+      || detectedExtensionsRef.current.length > 0
     ) return;
 
     speedBreachInFlightRef.current = true;
@@ -1412,6 +1475,7 @@ const AssessmentAttemptPage = () => {
       || finalized
       || cheatingFlagRequestRef.current
       || intentionalExitRef.current
+      || detectedExtensionsRef.current.length > 0
       || (
         eventType === 'window_blur'
         && Date.now() - exitEventSuppressedAtRef.current < EXIT_EVENT_SUPPRESSION_MS
@@ -1423,6 +1487,8 @@ const AssessmentAttemptPage = () => {
   reportPageIntegrityEventRef.current = recordPageIntegrityEvent;
 
   const updateCode = (questionId, nextCode, measureSpeed = true, inputMetadata = null) => {
+    if (detectedExtensionsRef.current.length > 0) return;
+    if (measureSpeed && assignment?.status === 'started' && !inputMetadata?.isTrusted) return;
     const previousCode = codeRef.current[questionId] ?? '';
     if (
       measureSpeed
@@ -1434,7 +1500,9 @@ const AssessmentAttemptPage = () => {
       const recentWordSamples = codeWordInsertionSamplesRef.current.filter(
         (sample) => now - sample.at < CODE_INSERTION_WINDOW_MS,
       );
-      const insertedWords = countInsertedWords(previousCode, insertion);
+      const insertedWords = inputMetadata?.isTrusted && inputMetadata?.isPrintable
+        ? countInsertedWords(previousCode, insertion)
+        : 0;
       if (insertedWords > 0) recentWordSamples.push({ at: now, words: insertedWords });
       codeWordInsertionSamplesRef.current = recentWordSamples;
       const wordsPerSecond = recentWordSamples.reduce((total, sample) => total + sample.words, 0);
@@ -1452,9 +1520,7 @@ const AssessmentAttemptPage = () => {
         speedBreachEventIdRef.current = null;
       } else {
         const insertedTextCharacters = insertion.text.length;
-        const insertedCharacters = inputMetadata?.isPrintable
-          ? Math.min(1, insertedTextCharacters)
-          : insertedTextCharacters;
+        const insertedCharacters = inputMetadata?.isPrintable && insertedTextCharacters > 0 ? 1 : 0;
         if (insertedCharacters > 0) {
           const now = Date.now();
           const samples = codeInsertionSamplesRef.current.filter(
@@ -1463,6 +1529,8 @@ const AssessmentAttemptPage = () => {
           samples.push({ at: now, characters: insertedCharacters });
           codeInsertionSamplesRef.current = samples;
           const charactersInWindow = samples.reduce((total, sample) => total + sample.characters, 0);
+          // One trusted printable keystroke is one character; speed is the rolling
+          // one-second character count converted using five characters per word.
           const speedWpm = (charactersInWindow * 60_000)
             / (CHARACTERS_PER_WORD * CODE_SPEED_WINDOW_MS);
 
@@ -1662,7 +1730,12 @@ const AssessmentAttemptPage = () => {
   }, [enterFullscreen, finalized]);
 
   const startAssessmentInFullscreen = async () => {
-    if (!assignment?.id || !assessment || startingAttempt) return;
+    if (
+      !assignment?.id
+      || !assessment
+      || startingAttempt
+      || detectedExtensionsRef.current.length > 0
+    ) return;
     setStartingAttempt(true);
     setStartError('');
     try {
@@ -1743,6 +1816,27 @@ const AssessmentAttemptPage = () => {
       style={isMobileKeyboardOpen && visualViewportHeight ? { height: `${visualViewportHeight}px`, minHeight: 0 } : undefined}
       onContextMenu={(event) => event.preventDefault()}
     >
+      {isExtensionBlocked && !finalized && (
+        <div className="fixed inset-0 z-[140] flex items-center justify-center bg-slate-950/95 p-6" role="alertdialog" aria-modal="true" aria-labelledby="extension-lock-title">
+          <div className="max-w-lg space-y-4 rounded-2xl border border-amber-800 bg-slate-900 p-6 text-center shadow-2xl">
+            <ShieldAlert size={32} className="mx-auto text-amber-300" />
+            <h2 id="extension-lock-title" className="text-xl font-bold text-white">Unapproved extension or script detected</h2>
+            <p className="text-sm leading-6 text-slate-300">
+              The coding window is paused while this extension or script is active:
+            </p>
+            <ul className="space-y-1 text-sm font-semibold text-amber-100" aria-label="Detected extensions">
+              {detectedExtensions.map((extensionName) => <li key={extensionName}>{extensionName}</li>)}
+            </ul>
+            <p className="text-sm leading-6 text-slate-300">
+              Turn off or remove them in your browser settings, then return here. Your work is saved and the page rechecks automatically; the coding window unlocks when their page markers are gone. Faculty do not need to clear this temporary block.
+            </p>
+            <p className="text-xs leading-5 text-slate-400">
+              The page blocks unapproved page scripts and recognizes selected writing and AI assistant extensions. Some extensions run in isolated browser contexts and cannot be detected by a web page.
+            </p>
+          </div>
+        </div>
+      )}
+
       {assignment.status === 'assigned' ? (
         <section className="mx-auto flex min-h-dvh w-full max-w-2xl flex-col justify-center gap-5 px-5 py-12">
           <div className="space-y-3">
@@ -1769,7 +1863,7 @@ const AssessmentAttemptPage = () => {
           {startError && <Alert type="error">{startError}</Alert>}
           <div className="flex flex-wrap gap-3">
             <Button variant="ghost" onClick={exitAttempt} disabled={startingAttempt}>Back to assessment details</Button>
-            <Button onClick={startAssessmentInFullscreen} loading={startingAttempt} disabled={startingAttempt}>
+            <Button onClick={startAssessmentInFullscreen} loading={startingAttempt} disabled={startingAttempt || isExtensionBlocked}>
               Enter fullscreen and start assessment
             </Button>
           </div>
@@ -2114,7 +2208,7 @@ const AssessmentAttemptPage = () => {
                   : submissionIds[currentQuestion.id] ? 'Submit question again' : 'Submit question'}
               </Button>
               {assignment.status === 'started' && !finalized && (
-                <Button size="sm" loading={submitting} disabled={submitting}
+                <Button size="sm" loading={submitting} disabled={submitting || isExtensionBlocked}
                   onClick={() => setShowSubmitConfirm(true)}>
                   <CheckCircle2 size={14} />Submit assessment
                 </Button>
@@ -2131,7 +2225,7 @@ const AssessmentAttemptPage = () => {
         footer={(
           <>
             <Button variant="secondary" onClick={() => setShowSubmitConfirm(false)}>Keep working</Button>
-            <Button variant="danger" loading={submitting} disabled={submitting} onClick={() => performFinalSubmit(false)}>Submit assessment</Button>
+            <Button variant="danger" loading={submitting} disabled={submitting || isExtensionBlocked} onClick={() => performFinalSubmit(false)}>Submit assessment</Button>
           </>
         )}
       >

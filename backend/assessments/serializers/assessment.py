@@ -297,10 +297,7 @@ class AssessmentAssignmentSerializer(serializers.ModelSerializer):
         source="student.get_full_name", read_only=True
     )
     assessment_title = serializers.CharField(source="assessment.title", read_only=True)
-    integrity_warning_count = serializers.IntegerField(
-        source="student.integrity_warning_count",
-        read_only=True,
-    )
+    integrity_warning_count = serializers.IntegerField(read_only=True)
     email_notifications = serializers.SerializerMethodField()
 
     def get_email_notifications(self, assignment):

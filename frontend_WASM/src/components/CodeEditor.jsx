@@ -23,6 +23,7 @@ const CodeEditor = ({
   const captureKeydown = (event) => {
     const keyboardEvent = event.nativeEvent || event;
     keydownMetadataRef.current = {
+      isTrusted: Boolean(keyboardEvent.isTrusted),
       repeat: Boolean(keyboardEvent.repeat),
       key: keyboardEvent.key,
       isPrintable: typeof keyboardEvent.key === 'string'

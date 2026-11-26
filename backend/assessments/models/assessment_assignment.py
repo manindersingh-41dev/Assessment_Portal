@@ -68,6 +68,10 @@ class AssessmentAssignment(UUIDModel, TimeStampedModel, CreatedByModel):
         blank=True,
         help_text="Optional deadline for this specific assignment.",
     )
+    integrity_warning_count = models.PositiveSmallIntegerField(
+        default=0,
+        help_text="Integrity warnings recorded during this assessment assignment.",
+    )
     is_flagged_cheating = models.BooleanField(
         default=False,
         db_index=True,

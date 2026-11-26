@@ -26,8 +26,6 @@ from django.db.models import (
 from django.db import transaction
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
-from users.models import User
-
 from .models import (
     Assessment, AssessmentAnswerDraft, AssessmentNotification, AssessmentQuestion,
     AssessmentAssignment, AssessmentIntegrityEvent,
@@ -525,7 +523,7 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
         user = self.request.user
 
         if user.role == 'faculty' and user.is_faculty_approved:
-            if self.action == 'clear_cheating_flag':
+            if self.action in ('clear_cheating_flag', 'clear_integrity_warnings'):
                 return AssessmentAssignment.objects.select_related(
                     'assessment', 'student', 'cheating_flag_cleared_by'
                 )
@@ -598,7 +596,7 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
             'is_flagged_cheating': assignment.is_flagged_cheating,
             'cheating_flag_reason': assignment.cheating_flag_reason,
             'cheating_flag_cleared_at': assignment.cheating_flag_cleared_at,
-            'integrity_warning_count': assignment.student.integrity_warning_count,
+            'integrity_warning_count': assignment.integrity_warning_count,
         })
 
     @action(detail=True, methods=['post'], url_path='integrity-event')
@@ -681,7 +679,7 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
                 'outcome': None,
                 'locked': assignment.is_flagged_cheating,
                 'ignored': True,
-                'integrity_warning_count': request.user.integrity_warning_count,
+                'integrity_warning_count': assignment.integrity_warning_count,
                 'assignment': AssessmentAssignmentSerializer(
                     assignment,
                     context={'request': request},
@@ -700,12 +698,12 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
                 )
 
         with transaction.atomic():
-            student = User.objects.select_for_update().get(pk=assignment.student_id)
             assignment = (
                 AssessmentAssignment.objects.select_for_update()
-                .select_related('assessment')
+                .select_related('assessment', 'student')
                 .get(pk=assignment.pk)
             )
+            student = assignment.student
             breach_event = AssessmentIntegrityEvent.objects.filter(
                 student=student,
                 event_id=event_id,
@@ -724,7 +722,7 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
                 if (
                     immediate_code_insertion_lock
                     or assignment.is_flagged_cheating
-                    or student.integrity_warning_count >= MAX_INTEGRITY_WARNINGS
+                    or assignment.integrity_warning_count >= MAX_INTEGRITY_WARNINGS
                 ):
                     outcome = AssessmentIntegrityEvent.Outcome.LOCKED
                     if not assignment.is_flagged_cheating:
@@ -748,8 +746,8 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
                             'updated_at',
                         ])
                 else:
-                    student.integrity_warning_count += 1
-                    student.save(update_fields=['integrity_warning_count', 'updated_at'])
+                    assignment.integrity_warning_count += 1
+                    assignment.save(update_fields=['integrity_warning_count', 'updated_at'])
                     outcome = AssessmentIntegrityEvent.Outcome.WARNING
 
                 breach_event = AssessmentIntegrityEvent.objects.create(
@@ -764,7 +762,7 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
                 )
 
             assignment.student = student
-            warning_count = student.integrity_warning_count
+            warning_count = assignment.integrity_warning_count
             event_type = breach_event.event_type
             locked = breach_event.outcome == AssessmentIntegrityEvent.Outcome.LOCKED
 
@@ -833,9 +831,8 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
         visible_assignment = self.get_object()
         lock_cleared = False
         with transaction.atomic():
-            student = User.objects.select_for_update().get(pk=visible_assignment.student_id)
             assignment = AssessmentAssignment.objects.select_for_update().select_related(
-                'assessment'
+                'assessment', 'student', 'cheating_flag_cleared_by'
             ).get(pk=visible_assignment.pk)
 
             if assignment.is_flagged_cheating:
@@ -849,18 +846,41 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
                     'cheating_flag_cleared_by',
                     'updated_at',
                 ])
-                if student.integrity_warning_count:
-                    student.integrity_warning_count = 0
-                    student.save(update_fields=['integrity_warning_count', 'updated_at'])
-
-            assignment.student = student
+                if assignment.integrity_warning_count:
+                    assignment.integrity_warning_count = 0
+                    assignment.save(update_fields=['integrity_warning_count', 'updated_at'])
 
         return Response({
             'message': (
-                'The coding lock has been removed and the student warning count reset to zero.'
+                'The coding lock has been removed and this assessment warning count reset to zero.'
                 if lock_cleared
                 else 'No active coding lock was found.'
             ),
+            'assignment': AssessmentAssignmentSerializer(
+                assignment,
+                context={'request': request},
+            ).data,
+        })
+
+    @action(detail=True, methods=['post'], url_path='clear-integrity-warnings')
+    def clear_integrity_warnings(self, request, pk=None):
+        """Reset an assignment's warning count without changing its lock state."""
+        if request.user.role != 'faculty' or not request.user.is_faculty_approved:
+            return Response(
+                {'error': 'Only approved faculty can clear integrity warnings.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        assignment = self.get_object()
+        with transaction.atomic():
+            assignment = AssessmentAssignment.objects.select_for_update().select_related(
+                'assessment', 'student', 'cheating_flag_cleared_by'
+            ).get(pk=assignment.pk)
+            assignment.integrity_warning_count = 0
+            assignment.save(update_fields=['integrity_warning_count', 'updated_at'])
+
+        return Response({
+            'message': 'Integrity warning count cleared for this assessment.',
             'assignment': AssessmentAssignmentSerializer(
                 assignment,
                 context={'request': request},

@@ -100,7 +100,7 @@ class User(AbstractUser):
 
     integrity_warning_count = models.PositiveSmallIntegerField(
         default=0,
-        help_text="Lifetime count of integrity warnings given to this student.",
+        help_text="Deprecated; integrity warnings are now counted per assessment assignment.",
     )
 
     active_session_id = models.UUIDField(
