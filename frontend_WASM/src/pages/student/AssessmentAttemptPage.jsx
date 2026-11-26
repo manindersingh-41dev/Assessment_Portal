@@ -1820,9 +1820,9 @@ const AssessmentAttemptPage = () => {
         <div className="fixed inset-0 z-[140] flex items-center justify-center bg-slate-950/95 p-6" role="alertdialog" aria-modal="true" aria-labelledby="extension-lock-title">
           <div className="max-w-lg space-y-4 rounded-2xl border border-amber-800 bg-slate-900 p-6 text-center shadow-2xl">
             <ShieldAlert size={32} className="mx-auto text-amber-300" />
-            <h2 id="extension-lock-title" className="text-xl font-bold text-white">Unapproved extension or script detected</h2>
+            <h2 id="extension-lock-title" className="text-xl font-bold text-white">Browser extension detected</h2>
             <p className="text-sm leading-6 text-slate-300">
-              The coding window is paused while this extension or script is active:
+              The coding window is paused while this extension is active:
             </p>
             <ul className="space-y-1 text-sm font-semibold text-amber-100" aria-label="Detected extensions">
               {detectedExtensions.map((extensionName) => <li key={extensionName}>{extensionName}</li>)}
@@ -1831,7 +1831,7 @@ const AssessmentAttemptPage = () => {
               Turn off or remove them in your browser settings, then return here. Your work is saved and the page rechecks automatically; the coding window unlocks when their page markers are gone. Faculty do not need to clear this temporary block.
             </p>
             <p className="text-xs leading-5 text-slate-400">
-              The page blocks unapproved page scripts and recognizes selected writing and AI assistant extensions. Some extensions run in isolated browser contexts and cannot be detected by a web page.
+              This page checks for browser extension scripts and selected writing and AI assistants. Some extensions run in isolated browser contexts and cannot be detected by a web page.
             </p>
           </div>
         </div>

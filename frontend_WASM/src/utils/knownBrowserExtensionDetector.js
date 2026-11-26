@@ -78,37 +78,31 @@ export const EXTENSION_MARKER_ATTRIBUTES = [
   'data-perplexity',
 ];
 
-const EXECUTABLE_SCRIPT_TYPES = new Set([
-  '',
-  'module',
-  'text/javascript',
-  'application/javascript',
-  'text/ecmascript',
-  'application/ecmascript',
+const BROWSER_EXTENSION_SCRIPT_PROTOCOLS = new Set([
+  'chrome-extension:',
+  'moz-extension:',
+  'safari-web-extension:',
+  'ms-browser-extension:',
+  'edge-extension:',
 ]);
 
-const hasUnapprovedExecutableScript = (root) => {
-  const pageOrigin = root.location?.origin || window.location.origin;
-  return Array.from(root.querySelectorAll('script')).some((script) => {
-    const scriptType = (script.getAttribute('type') || '').trim().toLowerCase();
-    if (!EXECUTABLE_SCRIPT_TYPES.has(scriptType)) return false;
-
+const hasBrowserExtensionScript = (root) => (
+  Array.from(root.querySelectorAll('script[src]')).some((script) => {
     const source = script.getAttribute('src');
-    if (!source) return Boolean(script.textContent?.trim());
-
     try {
-      return new URL(source, root.location?.href || window.location.href).origin !== pageOrigin;
+      const scriptUrl = new URL(source, root.location?.href || window.location.href);
+      return BROWSER_EXTENSION_SCRIPT_PROTOCOLS.has(scriptUrl.protocol);
     } catch {
-      return true;
+      return false;
     }
-  });
-};
+  })
+);
 
 export const detectKnownBrowserExtensions = (root = document) => {
   const detected = EXTENSION_SIGNATURES
     .filter(({ selectors }) => selectors.some((selector) => root.querySelector(selector)))
     .map(({ name }) => name);
 
-  if (hasUnapprovedExecutableScript(root)) detected.push('Unapproved page script');
+  if (hasBrowserExtensionScript(root)) detected.push('Browser extension script');
   return detected;
 };
