@@ -88,7 +88,7 @@ const FacultyDashboard = () => {
       setLockedAssignments((current) => current.filter((assignment) => assignment.id !== assignmentId));
       addNotification('Coding lock removed and this assessment warning count reset to zero.', 'success');
     } catch (errorDetails) {
-      addNotification(errorDetails.response?.data?.error || 'Could not remove the coding lock.', 'error');
+      addNotification(errorDetails.response?.data?.error || errorDetails.response?.data?.detail || 'Could not remove the coding lock.', 'error');
     } finally {
       setUnlockingAssignmentId(null);
     }

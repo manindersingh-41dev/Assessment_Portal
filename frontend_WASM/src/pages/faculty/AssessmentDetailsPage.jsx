@@ -176,7 +176,7 @@ const AssessmentDetailsPage = () => {
       }
       addNotification('Coding lock removed and this assessment warning count reset to zero.', 'success');
     } catch (error) {
-      addNotification(error.response?.data?.error || 'Could not remove the coding lock.', 'error');
+      addNotification(error.response?.data?.error || error.response?.data?.detail || 'Could not remove the coding lock.', 'error');
     } finally {
       setUnlockingAssignmentId(null);
     }

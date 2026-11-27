@@ -55,8 +55,6 @@ from .notifications import (
 )
 
 MAX_INTEGRITY_WARNINGS = 3
-CODE_INSERTION_WARNING_WORDS_PER_SECOND = 3
-CODE_INSERTION_LOCK_WORDS_PER_SECOND = 6
 
 
 class AssessmentPagination(PageNumberPagination):
@@ -623,8 +621,19 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # The browser blocks paste/drop input directly. Typing-rate estimates are
+        # not reliable evidence of paste and must not create integrity warnings or locks.
+        if event_type in (
+            AssessmentIntegrityEvent.EventType.RAPID_CODE_INSERTION,
+            AssessmentIntegrityEvent.EventType.BULK_CODE_INSERTION,
+        ):
+            return Response({
+                'ignored': True,
+                'locked': assignment.is_flagged_cheating,
+                'integrity_warning_count': assignment.integrity_warning_count,
+            })
+
         speed_wpm = None
-        words_per_second = None
         sustained_ms = None
         if event_type == AssessmentIntegrityEvent.EventType.SPEED:
             try:
@@ -635,32 +644,6 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
                 sustained_ms = int(request.data.get('sustained_ms'))
             except (TypeError, ValueError):
                 sustained_ms = 0
-        if event_type in (
-            AssessmentIntegrityEvent.EventType.RAPID_CODE_INSERTION,
-            AssessmentIntegrityEvent.EventType.BULK_CODE_INSERTION,
-        ):
-            try:
-                words_per_second = float(request.data.get('words_per_second'))
-            except (TypeError, ValueError):
-                words_per_second = float('nan')
-            if not math.isfinite(words_per_second) or words_per_second <= CODE_INSERTION_WARNING_WORDS_PER_SECOND:
-                return Response(
-                    {'error': 'Code insertion must exceed 3 words per second.'},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            if (
-                event_type == AssessmentIntegrityEvent.EventType.BULK_CODE_INSERTION
-                and words_per_second <= CODE_INSERTION_LOCK_WORDS_PER_SECOND
-            ):
-                return Response(
-                    {'error': 'An immediate coding lock requires more than 6 words per second.'},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            if (
-                event_type == AssessmentIntegrityEvent.EventType.RAPID_CODE_INSERTION
-                and words_per_second > CODE_INSERTION_LOCK_WORDS_PER_SECOND
-            ):
-                event_type = AssessmentIntegrityEvent.EventType.BULK_CODE_INSERTION
         submitted_event_id = request.data.get('event_id')
         if submitted_event_id:
             try:
@@ -716,12 +699,8 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
                         status=status.HTTP_400_BAD_REQUEST,
                     )
 
-                immediate_code_insertion_lock = (
-                    event_type == AssessmentIntegrityEvent.EventType.BULK_CODE_INSERTION
-                )
                 if (
-                    immediate_code_insertion_lock
-                    or assignment.is_flagged_cheating
+                    assignment.is_flagged_cheating
                     or assignment.integrity_warning_count >= MAX_INTEGRITY_WARNINGS
                 ):
                     outcome = AssessmentIntegrityEvent.Outcome.LOCKED
@@ -729,7 +708,7 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
                         assignment.is_flagged_cheating = True
                         assignment.cheating_flag_reason = event_type
                         assignment.cheating_flag_speed_wpm = speed_wpm
-                        assignment.cheating_flag_words_per_second = words_per_second
+                        assignment.cheating_flag_words_per_second = None
                         assignment.cheating_flag_sustained_ms = sustained_ms
                         assignment.cheating_flagged_at = timezone.now()
                         assignment.cheating_flag_cleared_at = None
@@ -756,7 +735,6 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
                     event_id=event_id,
                     event_type=event_type,
                     speed_wpm=speed_wpm,
-                    words_per_second=words_per_second,
                     sustained_ms=sustained_ms,
                     outcome=outcome,
                 )
@@ -782,10 +760,9 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
                 AssessmentIntegrityEvent.EventType.SPEED:
                     'Code-writing speed stayed above the 85 WPM limit for at least three seconds.',
                 AssessmentIntegrityEvent.EventType.RAPID_CODE_INSERTION:
-                    f'The code editor received more than {CODE_INSERTION_WARNING_WORDS_PER_SECOND} '
-                    'words per second.',
+                    'Rapid code insertion was blocked without recording an integrity warning.',
                 AssessmentIntegrityEvent.EventType.BULK_CODE_INSERTION:
-                    'Code insertion exceeded 6 words per second.',
+                    'Bulk code insertion was blocked without recording an integrity warning.',
                 AssessmentIntegrityEvent.EventType.TAB_HIDDEN:
                     'The assessment tab became hidden or you switched away from it.',
                 AssessmentIntegrityEvent.EventType.WINDOW_BLUR:
@@ -802,8 +779,7 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
             )
             message = (
                 f'{event_messages[event_type]} {warning_kind} '
-                'Do not use AI or scripts to write code. '
-                'Do not try to paste code using any alternative method. '
+                'Follow the assessment rules and enter your solution in the editor.'
             )
 
         return Response({
@@ -828,27 +804,26 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        visible_assignment = self.get_object()
-        lock_cleared = False
         with transaction.atomic():
-            assignment = AssessmentAssignment.objects.select_for_update().select_related(
-                'assessment', 'student', 'cheating_flag_cleared_by'
-            ).get(pk=visible_assignment.pk)
-
-            if assignment.is_flagged_cheating:
-                lock_cleared = True
+            assignment = get_object_or_404(
+                AssessmentAssignment.objects.select_for_update().select_related(
+                    'assessment', 'student', 'cheating_flag_cleared_by'
+                ),
+                pk=pk,
+            )
+            lock_cleared = assignment.is_flagged_cheating
+            if lock_cleared:
                 assignment.is_flagged_cheating = False
+                assignment.integrity_warning_count = 0
                 assignment.cheating_flag_cleared_at = timezone.now()
                 assignment.cheating_flag_cleared_by = request.user
                 assignment.save(update_fields=[
                     'is_flagged_cheating',
+                    'integrity_warning_count',
                     'cheating_flag_cleared_at',
                     'cheating_flag_cleared_by',
                     'updated_at',
                 ])
-                if assignment.integrity_warning_count:
-                    assignment.integrity_warning_count = 0
-                    assignment.save(update_fields=['integrity_warning_count', 'updated_at'])
 
         return Response({
             'message': (
