@@ -806,9 +806,7 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
 
         with transaction.atomic():
             assignment = get_object_or_404(
-                AssessmentAssignment.objects.select_for_update().select_related(
-                    'assessment', 'student', 'cheating_flag_cleared_by'
-                ),
+                AssessmentAssignment.objects.select_for_update(),
                 pk=pk,
             )
             lock_cleared = assignment.is_flagged_cheating
@@ -848,9 +846,9 @@ class AssessmentAssignmentViewSet(viewsets.ReadOnlyModelViewSet):
 
         assignment = self.get_object()
         with transaction.atomic():
-            assignment = AssessmentAssignment.objects.select_for_update().select_related(
-                'assessment', 'student', 'cheating_flag_cleared_by'
-            ).get(pk=assignment.pk)
+            assignment = AssessmentAssignment.objects.select_for_update().get(
+                pk=assignment.pk
+            )
             assignment.integrity_warning_count = 0
             assignment.save(update_fields=['integrity_warning_count', 'updated_at'])
 
