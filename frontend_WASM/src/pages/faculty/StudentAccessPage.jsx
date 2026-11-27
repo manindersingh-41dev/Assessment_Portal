@@ -148,7 +148,11 @@ const StudentAccessPage = () => {
       setLockedAssignments((current) => current.filter((item) => item.id !== assignment.id));
       addNotification('Coding lock removed and this assessment warning count reset to zero.', 'success');
     } catch (error) {
-      addNotification(error.response?.data?.error || error.response?.data?.detail || 'Could not remove the coding lock.', 'error');
+      const message = error.response?.data?.error
+        || error.response?.data?.detail
+        || error.response?.data?.message
+        || `Could not remove the coding lock${error.response?.status ? ` (HTTP ${error.response.status})` : error.message ? `: ${error.message}` : '.'}`;
+      addNotification(message, 'error');
     } finally {
       setPendingCodingLockId(null);
     }
